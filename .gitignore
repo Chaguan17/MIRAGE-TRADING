@@ -1,6 +1,5 @@
 # Secretos y Configuración
 .env
-config.py
 
 # Datos y Memoria (No los subimos porque el servidor generará los suyos)
 storage/
