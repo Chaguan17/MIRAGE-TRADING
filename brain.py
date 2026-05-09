@@ -1,98 +1,99 @@
 import os
 import joblib
-from sklearn.ensemble import RandomForestClassifier
 import datetime
 import pandas as pd
-
+from sklearn.ensemble import RandomForestClassifier
+from methods import trend_follower, mean_reversion
 
 class MirageBrain:
     def __init__(self, model_name="mirage_v1.pkl"):
         self.model_path = f"storage/{model_name}"
+        # Definimos las columnas sensoriales exactas (La "visión" del bot)
+        self.feature_columns = ['RSI', 'ATR', 'EMA_diff']
         self.model = self._load_model()
 
     def _load_model(self):
-        # Si ya existe un aprendizaje previo, lo cargamos
+        """Carga la memoria persistente o inicializa un cerebro aprendiz."""
         if os.path.exists(self.model_path):
             print("🧠 Cerebro: Cargando memoria de experiencias previas...")
             return joblib.load(self.model_path)
         
-        # Si es un bot "recién nacido", creamos un modelo base
         print("🧠 Cerebro: Inicializando nuevo modelo (Modo Aprendiz).")
-        return RandomForestClassifier(n_estimators=100, random_state=42)
+        # Usamos class_weight='balanced' porque habrá más derrotas que victorias al inicio
+        return RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
 
-    def train(self, df):
+    def get_consensus_prediction(self, features_dict):
         """
-        Entrena al bot usando los indicadores como entrada (X) 
-        y el resultado futuro como salida (y).
+        ORQUESTADOR: Consulta expertos y filtra con IA.
+        Retorna: (Acción, Confianza, Método)
         """
-        # Seleccionamos las columnas que usaremos para predecir
-        features = ['RSI', 'trend_signal', 'ATR'] 
-        X = df[features]
-        y = df['target']
+        # 1. Transformar diccionario de entrada en DataFrame para la IA
+        df_features = pd.DataFrame([features_dict])
+        # Aseguramos que EMA_diff esté presente (EMA_20 - EMA_50)
+        df_features['EMA_diff'] = features_dict.get('EMA_20', 0) - features_dict.get('EMA_50', 0)
         
-        self.model.fit(X, y)
+        # 2. Consultar a los expertos (Lógica Técnica)
+        signals = {
+            'trend': trend_follower.analyze(df_features),
+            'reversion': mean_reversion.analyze(df_features)
+        }
         
-        # Guardamos lo aprendido en la carpeta storage
-        if not os.path.exists('storage'):
-            os.makedirs('storage')
-        joblib.dump(self.model, self.model_path)
-        print("📈 Cerebro: Entrenamiento completado. Memoria actualizada.")
+        best_action, method_conf, method_name = self._resolve_experts(signals)
+        
+        if best_action is None:
+            return None, 0, "None"
 
-    def predict(self, current_data):
-        """
-        Recibe los datos actuales y predice si hay probabilidad de éxito.
-        """
-        features = ['RSI', 'trend_signal', 'ATR']
-        X = current_data[features].tail(1) # Solo la última fila
+        # 3. FILTRO DE IA: ¿Qué probabilidad de éxito tiene este escenario?
+        ai_confidence = self._verify_with_ai(df_features[self.feature_columns])
         
-        prediction = self.model.predict(X)[0]
-        # Obtenemos la probabilidad (ej: 0.75 significa 75% de confianza)
-        probability = self.model.predict_proba(X).max()
+        # Confianza Final: 40% Técnica + 60% IA
+        final_confidence = (method_conf * 0.4) + (ai_confidence * 0.6)
         
-        return prediction, probability
-    
+        return best_action, final_confidence, method_name
+
+    def _resolve_experts(self, signals):
+        """Decide qué método técnico tiene más peso hoy."""
+        best_action = None
+        max_conf = 0
+        method_used = "None"
+
+        for name, (action, conf) in signals.items():
+            if action is not None and conf > max_conf:
+                best_action, max_conf, method_used = action, conf, name
+        return best_action, max_conf, method_used
+
+    def _verify_with_ai(self, X):
+        """Calcula la probabilidad de éxito según el histórico."""
+        try:
+            # Si el modelo no ha sido entrenado (recién nacido), devuelve 0.5 (neutral)
+            if not hasattr(self.model, "classes_"):
+                return 0.5
+            # predict_proba devuelve [prob_clase_0, prob_clase_1]
+            return self.model.predict_proba(X)[0][1] 
+        except:
+            return 0.5
+
     def nightly_retrain(self, history_path='storage/trade_history.csv'):
-        """
-        MODO SUEÑO PROFUNDO: El cerebro analiza las nuevas columnas sensoriales
-        y evoluciona su modelo para no repetir errores contextuales.
-        """
-        
-        print("\n" + "🌙"*20)
-        print("CEREBRO: Iniciando asimilación de experiencias...")
+        """Evolución del modelo basada en el diario de trading."""
+        print(f"\n{'🌙' * 10} MODO SUEÑO: Procesando Experiencias {'🌙' * 10}")
         
         try:
-            if not os.path.exists(history_path):
-                print("CEREBRO: No hay diario de operaciones. Sigo con el conocimiento actual.")
-                return
-                
+            if not os.path.exists(history_path): return
             df = pd.read_csv(history_path)
             
-            # Solo evolucionamos si tenemos suficientes experiencias nuevas (ej. 5 trades)
-            if len(df) < 5:
-                print(f"CEREBRO: Solo tengo {len(df)} experiencias. Necesito al menos 5 para no sacar conclusiones precipitadas.")
+            if len(df) < 10: # Subimos el listón a 10 para mayor estabilidad
+                print(f"CEREBRO: {len(df)}/10 trades. Datos insuficientes para evolucionar.")
                 return
 
-            print(f"📚 Analizando {len(df)} trades con Memoria Sensorial...")
+            # Preparación de datos (X = Sentidos, y = Resultado)
+            X = df[self.feature_columns]
+            y = df['result'].apply(lambda x: 1 if x == 'WIN' else 0)
 
-            # 1. EL "QUÉ PASÓ" (Features sensoriales)
-            X_real = df[['RSI', 'ATR', 'EMA_diff']]
+            self.model.fit(X, y)
             
-            # 2. EL "QUÉ DEBIÓ PASAR" (Etiquetas)
-            # 1 si fue WIN, 0 si fue LOSS
-            y_real = df['result'].apply(lambda x: 1 if x == 'WIN' else 0)
-
-            # 3. RE-ENTRENAMIENTO (Refuerzo)
-            # El modelo aprende a asociar esos indicadores con el éxito o el fracaso
-            self.model.fit(X_real, y_real)
+            # Guardado con versión
+            joblib.dump(self.model, self.model_path)
+            print(f"✅ EVOLUCIÓN: El cerebro ha asimilado {len(df)} lecciones.")
             
-            # 4. EVOLUCIÓN DE ARCHIVO
-            version = datetime.now().strftime("%Y%m%d")
-            new_path = f"storage/mirage_brain_v{version}.pkl"
-            joblib.dump(self.model, new_path)
-            
-            print(f"✅ EVOLUCIÓN COMPLETADA: He asimilado mis errores.")
-            print(f"🧠 Nuevo modelo guardado: {new_path}")
-            print("🌙"*20 + "\n")
-
         except Exception as e:
-            print(f"⚠️ Error en la fase de sueño: {e}")
+            print(f"⚠️ Error en fase de sueño: {e}")
