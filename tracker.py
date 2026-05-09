@@ -18,15 +18,24 @@ class TradeTracker:
         self._load_historical_stats() # Recuperar la memoria al iniciar
 
     def _ensure_storage(self):
-        """Garantiza que la carpeta y el archivo existan."""
         if not os.path.exists('storage'):
             os.makedirs('storage')
-        if not os.path.exists(self.filepath):
-            df = pd.DataFrame(columns=[
-                'timestamp', 'action', 'entry_price', 'close_price', 
-                'size', 'result', 'pnl_usdt', 'RSI', 'ATR', 'EMA_diff'
-            ])
-            df.to_csv(self.filepath, index=False)
+    columnas = [
+        'timestamp', 'action', 'entry_price', 'close_price', 
+        'size', 'result', 'pnl_usdt', 'RSI', 'ATR', 'EMA_diff'
+    ]
+    if not os.path.exists(self.filepath):
+        df = pd.DataFrame(columns=columnas)
+        df.to_csv(self.filepath, index=False)
+        
+    else:
+        # Si el archivo existe, verificamos que tenga el encabezado correcto
+        df_check = pd.read_csv(self.filepath, nrows=0)
+        if len(df_check.columns) != len(columnas):
+            print("⚠️ Re-estructurando encabezado del CSV para sincronizar columnas...")
+            # Leemos datos, reasignamos columnas y guardamos
+            df_fix = pd.read_csv(self.filepath, names=columnas, skiprows=1)
+            df_fix.to_csv(self.filepath, index=False)
 
     def _load_historical_stats(self):
         """

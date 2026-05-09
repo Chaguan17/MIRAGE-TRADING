@@ -3,7 +3,9 @@ import joblib
 import datetime
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from methods import trend_follower, mean_reversion
+from methods import trend_follower, mean_reversion, breakout_logic # Añadimos el nuevo experto
+
+
 
 class MirageBrain:
     def __init__(self, model_name="mirage_v1.pkl"):
@@ -23,32 +25,17 @@ class MirageBrain:
         return RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
 
     def get_consensus_prediction(self, features_dict):
-        """
-        ORQUESTADOR: Consulta expertos y filtra con IA.
-        Retorna: (Acción, Confianza, Método)
-        """
-        # 1. Transformar diccionario de entrada en DataFrame para la IA
         df_features = pd.DataFrame([features_dict])
-        # Aseguramos que EMA_diff esté presente (EMA_20 - EMA_50)
-        df_features['EMA_diff'] = features_dict.get('EMA_20', 0) - features_dict.get('EMA_50', 0)
-        
-        # 2. Consultar a los expertos (Lógica Técnica)
         signals = {
-            'trend': trend_follower.analyze(df_features),
-            'reversion': mean_reversion.analyze(df_features)
-        }
-        
+        'trend': trend_follower.analyze(df_features),
+        'reversion': mean_reversion.analyze(df_features),
+        'breakout': breakout_logic.analyze(df_features) # Integrado
+    }
         best_action, method_conf, method_name = self._resolve_experts(signals)
-        
         if best_action is None:
             return None, 0, "None"
-
-        # 3. FILTRO DE IA: ¿Qué probabilidad de éxito tiene este escenario?
         ai_confidence = self._verify_with_ai(df_features[self.feature_columns])
-        
-        # Confianza Final: 40% Técnica + 60% IA
         final_confidence = (method_conf * 0.4) + (ai_confidence * 0.6)
-        
         return best_action, final_confidence, method_name
 
     def _resolve_experts(self, signals):
