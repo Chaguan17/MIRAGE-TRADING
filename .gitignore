@@ -1,0 +1,14 @@
+# Secretos y Configuración
+.env
+config.py
+
+# Datos y Memoria (No los subimos porque el servidor generará los suyos)
+storage/
+trade_history.csv
+*.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
