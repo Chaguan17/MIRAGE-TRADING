@@ -1,19 +1,23 @@
 import os
 from dotenv import load_dotenv
 
-# Intentar cargar el archivo .env (para local)
 load_dotenv()
 
-# Ahora busca en el .env o en el sistema (para el servidor)
 API_KEY = os.getenv('BINANCE_API_KEY')
 API_SECRET = os.getenv('BINANCE_API_SECRET')
 
-# Si sigue sin encontrar nada, avisamos para evitar el error de Binance
 if not API_KEY or not API_SECRET:
     print("⚠️ ADVERTENCIA: No se detectaron las llaves API. Revisa tu archivo .env")
 
 SYMBOL = 'BTCUSDT'
 TIMEFRAME = '1m'
 
-SLEEP_HOUR = 0
-SLEEP_MINUTE = 5
+# ─── Ciclo Circadiano ───────────────────────────────────────────────────────
+# Hora en que el bot entra en MODO SUEÑO para reentrenar el modelo.
+# Se define como una ventana: desde SLEEP_START_HOUR:SLEEP_START_MINUTE
+# hasta SLEEP_END_HOUR:SLEEP_END_MINUTE (hora local del servidor).
+# Durante ese bloque NO opera; al salir, despierta con el cerebro actualizado.
+SLEEP_START_HOUR   = 0    # 00:00 — medianoche
+SLEEP_START_MINUTE = 0
+SLEEP_END_HOUR     = 0    # 00:05 — vuelve a operar pasados 5 minutos
+SLEEP_END_MINUTE   = 5
