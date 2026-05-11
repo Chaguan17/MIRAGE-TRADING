@@ -1,164 +1,213 @@
 import os
 import joblib
 import pandas as pd
+import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.utils.class_weight import compute_class_weight
 from methods import trend_follower, mean_reversion, breakout_logic
 
 
 class MirageBrain:
-    """
-    Cerebro autodependiente de Mirage.
 
-    Ciclo de vida:
-    1. Sin historial → confía 100% en los expertos técnicos (arranca operando).
-    2. Cada vez que se cierra un trade → online_update() refuerza el modelo
-       inmediatamente con esa sola experiencia.
-    3. En la ventana de sueño → nightly_retrain() reajusta el modelo completo
-       con todo el historial acumulado.
-    4. Cuantos más trades, más peso tiene la IA y menos los expertos técnicos,
-       hasta un techo del 70% IA / 30% técnico.
-    """
+    MIN_TRADES_FOR_AI = 5
+    MAX_AI_WEIGHT     = 0.70
+    BASE_ESTIMATORS   = 100   # árboles base
+    ESTIMATORS_STEP   = 10    # árboles que se añaden en cada online_update
 
-    MIN_TRADES_FOR_AI = 5      # A partir de aquí la IA empieza a opinar
-    MAX_AI_WEIGHT     = 0.70   # Techo de peso de la IA (nunca descarta técnicos del todo)
+    def __init__(self):
+        self.outcome_path = 'storage/model_outcome.pkl'
+        self.sl_path      = 'storage/model_sl.pkl'
+        self.scaler_path  = 'storage/scaler.pkl'
 
-    def __init__(self, model_name="mirage_v1.pkl"):
-        self.model_path    = f"storage/{model_name}"
-        self.feature_cols  = ['RSI', 'ATR', 'EMA_diff']
-        self.model         = self._load_model()
-        self.trades_seen   = self._count_historical_trades()
+        self.model_outcome = self._load_or_create(self.outcome_path)
+        self.model_sl      = self._load_or_create(self.sl_path)
+        self.scaler        = self._load_scaler()
+
+        self.trades_seen       = self._count_historical_trades()
+        self._bootstrap_buffer = []
+
+        from data_engine import DataEngine
+        self._feat_cols = DataEngine().get_feature_columns()
 
     # ──────────────────────────────────────────────────────────────────────────
-    # CARGA / INICIALIZACIÓN
+    # INIT
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _load_model(self):
-        if os.path.exists(self.model_path):
-            print("🧠 Cerebro: Cargando memoria de experiencias previas...")
-            return joblib.load(self.model_path)
-        print("🧠 Cerebro: Sin memoria previa — arrancando en Modo Experto Técnico.")
+    def _load_or_create(self, path):
+        if os.path.exists(path):
+            print(f"🧠 Cargando modelo desde disco: {path}")
+            return joblib.load(path)
+        print(f"🧠 Modelo nuevo — Modo Experto Técnico.")
+        # Sin class_weight='balanced' + warm_start juntos
+        # Los pesos los calculamos manualmente antes de cada fit
         return RandomForestClassifier(
-            n_estimators=100,
+            n_estimators=self.BASE_ESTIMATORS,
             random_state=42,
-            class_weight='balanced',
-            warm_start=True,   # permite añadir árboles sin reentrenar desde cero
+            warm_start=True,   # warm_start SÍ, pero sin balanced
         )
 
+    def _load_scaler(self):
+        if os.path.exists(self.scaler_path):
+            return joblib.load(self.scaler_path)
+        return StandardScaler()
+
     def _count_historical_trades(self):
-        """Cuántos trades ya hay en el CSV al arrancar."""
         path = 'storage/trade_history.csv'
         try:
             if os.path.exists(path):
-                df = pd.read_csv(path)
-                return len(df)
+                return len(pd.read_csv(path))
         except Exception:
             pass
         return 0
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # PESOS DE CLASE (reemplaza class_weight='balanced')
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _compute_weights(self, y):
+        """
+        Calcula manualmente los pesos por clase para compensar desbalance
+        (más LOSS que WIN o viceversa) sin usar 'balanced' + warm_start.
+        """
+        classes = np.unique(y)
+        if len(classes) < 2:
+            return None
+        weights = compute_class_weight('balanced', classes=classes, y=np.array(y))
+        return dict(zip(classes, weights))
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # FEATURES
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _build_X(self, features_dict):
+        row = {col: features_dict.get(col, 0.0) for col in self._feat_cols}
+        return pd.DataFrame([row])
+
+    def _scale(self, X):
+        try:
+            if hasattr(self.scaler, 'mean_'):
+                return self.scaler.transform(X)
+        except Exception:
+            pass
+        return X.values
+
+    def _fit_scaler_and_scale(self, X):
+        Xs = self.scaler.fit_transform(X)
+        joblib.dump(self.scaler, self.scaler_path)
+        return Xs
 
     # ──────────────────────────────────────────────────────────────────────────
     # PREDICCIÓN
     # ──────────────────────────────────────────────────────────────────────────
 
     def get_consensus_prediction(self, features_dict):
-        df_f = pd.DataFrame([features_dict])
-        if 'EMA_diff' not in features_dict:
-            df_f['EMA_diff'] = features_dict.get('EMA_20', 0) - features_dict.get('EMA_50', 0)
+        X = self._build_X(features_dict)
 
         signals = {
-            'trend':     trend_follower.analyze(df_f),
-            'reversion': mean_reversion.analyze(df_f),
-            'breakout':  breakout_logic.analyze(df_f),
+            'trend':     trend_follower.analyze(pd.DataFrame([features_dict])),
+            'reversion': mean_reversion.analyze(pd.DataFrame([features_dict])),
+            'breakout':  breakout_logic.analyze(pd.DataFrame([features_dict])),
         }
 
         best_action, tech_conf, method_name = self._resolve_experts(signals)
         if best_action is None:
-            return None, 0, "None"
+            return None, 0, 'None', True
 
-        # Pesos dinámicos: cuantos más trades, más IA y menos técnico puro
         ai_weight   = self._ai_weight()
         tech_weight = 1.0 - ai_weight
+        ai_conf     = self._predict_outcome(X, best_action)
+        confidence  = (tech_conf * tech_weight) + (ai_conf * ai_weight)
+        use_sl      = self._predict_use_sl(X)
 
-        ai_conf       = self._ai_confidence(df_f[self.feature_cols], best_action)
-        final_conf    = (tech_conf * tech_weight) + (ai_conf * ai_weight)
-
-        return best_action, final_conf, method_name
+        return best_action, confidence, method_name, use_sl
 
     def _resolve_experts(self, signals):
-        best_action, max_conf, method_used = None, 0, "None"
+        best_action, max_conf, method = None, 0, 'None'
         for name, (action, conf) in signals.items():
             if action is not None and conf > max_conf:
-                best_action, max_conf, method_used = action, conf, name
-        return best_action, max_conf, method_used
+                best_action, max_conf, method = action, conf, name
+        return best_action, max_conf, method
 
     def _ai_weight(self):
-        """
-        0.0  → sin trades (técnicos mandan)
-        sube linealmente hasta MAX_AI_WEIGHT a partir de MIN_TRADES_FOR_AI.
-        """
         if self.trades_seen < self.MIN_TRADES_FOR_AI:
             return 0.0
         ratio = min(1.0, (self.trades_seen - self.MIN_TRADES_FOR_AI) / 45)
         return ratio * self.MAX_AI_WEIGHT
 
-    def _ai_confidence(self, X, action_code):
-        """Probabilidad de que la IA avale la acción propuesta."""
+    def _predict_outcome(self, X, action_code):
         try:
-            if not hasattr(self.model, "classes_"):
+            if not hasattr(self.model_outcome, 'classes_'):
                 return 0.5
-            proba = self.model.predict_proba(X)[0]
-            # proba[1] = prob de WIN; si la acción es SHORT devolvemos 1 - proba[1]
+            Xs    = self._scale(X)
+            proba = self.model_outcome.predict_proba(Xs)[0]
             return proba[1] if action_code == 1 else (1 - proba[1])
         except Exception:
             return 0.5
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # APRENDIZAJE INMEDIATO (tras cada trade cerrado)
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def online_update(self, features_dict, result_label):
-        """
-        Reforza el modelo con UN solo trade recién cerrado.
-        Funciona tanto si el modelo está recién nacido como si ya tiene historial.
-        result_label: 'WIN' o 'LOSS'
-        """
+    def _predict_use_sl(self, X):
         try:
-            ema_diff = features_dict.get('EMA_diff',
-                       features_dict.get('EMA_20', 0) - features_dict.get('EMA_50', 0))
-            X = pd.DataFrame([{
-                'RSI':     features_dict.get('RSI', 50),
-                'ATR':     features_dict.get('ATR', 0),
-                'EMA_diff': ema_diff,
-            }])
-            y = [1 if result_label == 'WIN' else 0]
+            if not hasattr(self.model_sl, 'classes_') or self.trades_seen < self.MIN_TRADES_FOR_AI:
+                return True
+            Xs = self._scale(X)
+            return self.model_sl.predict_proba(Xs)[0][1] >= 0.5
+        except Exception:
+            return True
 
-            # warm_start=True: añade árboles en lugar de reemplazarlos
-            trained = hasattr(self.model, "classes_")
-            if not trained:
-                # Primera vez: necesitamos al menos 2 clases distintas para fit
-                # Si solo tenemos un resultado, guardamos y esperamos al siguiente
-                if not hasattr(self, '_bootstrap_X'):
-                    self._bootstrap_X = X
-                    self._bootstrap_y = y
-                    self.trades_seen += 1
-                    return
-                X = pd.concat([self._bootstrap_X, X])
-                y = self._bootstrap_y + y
-                del self._bootstrap_X, self._bootstrap_y
+    # ──────────────────────────────────────────────────────────────────────────
+    # APRENDIZAJE INMEDIATO
+    # ──────────────────────────────────────────────────────────────────────────
 
-            self.model.fit(X, y)
+    def online_update(self, features_dict, result_label, sl_was_used, sl_was_hit):
+        try:
+            X         = self._build_X(features_dict)
+            y_outcome = [1 if result_label == 'WIN' else 0]
+            y_sl      = [1 if (sl_was_used and sl_was_hit) else 0]
+
+            self._bootstrap_buffer.append((X, y_outcome, y_sl))
+
+            if len(self._bootstrap_buffer) < 2:
+                self.trades_seen += 1
+                return
+
+            ys_outcome = [b[1][0] for b in self._bootstrap_buffer]
+            ys_sl      = [b[2][0] for b in self._bootstrap_buffer]
+            X_all      = pd.concat([b[0] for b in self._bootstrap_buffer])
+            Xs         = self._fit_scaler_and_scale(X_all)
+
+            # Outcome model — aumentar n_estimators para que warm_start añada árboles
+            if len(set(ys_outcome)) >= 2:
+                w = self._compute_weights(ys_outcome)
+                current_n = self.model_outcome.n_estimators
+                self.model_outcome.set_params(
+                    n_estimators=current_n + self.ESTIMATORS_STEP,
+                    class_weight=w,
+                )
+                self.model_outcome.fit(Xs, ys_outcome)
+
+            # SL model
+            if len(set(ys_sl)) >= 2:
+                w_sl = self._compute_weights(ys_sl)
+                current_n = self.model_sl.n_estimators
+                self.model_sl.set_params(
+                    n_estimators=current_n + self.ESTIMATORS_STEP,
+                    class_weight=w_sl,
+                )
+                self.model_sl.fit(self._scale(X_all), ys_sl)
+
             self.trades_seen += 1
-            self._save_model()
-            print(f"🔄 Cerebro actualizado al momento ({self.trades_seen} experiencias | peso IA: {self._ai_weight():.0%})")
+            self._save_all()
+            print(f"🔄 Cerebro actualizado ({self.trades_seen} exp. | peso IA: {self._ai_weight():.0%})")
+
         except Exception as e:
             print(f"⚠️ online_update error: {e}")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # REENTRENAMIENTO NOCTURNO COMPLETO
+    # REENTRENAMIENTO NOCTURNO
     # ──────────────────────────────────────────────────────────────────────────
 
     def nightly_retrain(self, history_path='storage/trade_history.csv'):
-        """Reajusta el modelo completo con todo el historial (ventana de sueño)."""
-        print(f"\n{'🌙' * 8} MODO SUEÑO: Procesando Experiencias {'🌙' * 8}")
+        print(f"\n{'🌙'*8} MODO SUEÑO: Reentrenando con historial completo {'🌙'*8}")
         try:
             if not os.path.exists(history_path):
                 print("CEREBRO: Sin historial todavía.")
@@ -166,26 +215,69 @@ class MirageBrain:
 
             df = pd.read_csv(history_path)
             if len(df) < self.MIN_TRADES_FOR_AI:
-                print(f"CEREBRO: {len(df)}/{self.MIN_TRADES_FOR_AI} trades. "
-                      f"Operando en Modo Experto Técnico hasta acumular más datos.")
+                print(f"CEREBRO: {len(df)}/{self.MIN_TRADES_FOR_AI} trades mínimos.")
                 return
 
-            X = df[self.feature_cols]
-            y = df['result'].apply(lambda x: 1 if x == 'WIN' else 0)
+            for c in self._feat_cols:
+                if c not in df.columns:
+                    df[c] = 0.0
 
-            # Reentrenamiento completo (resetea warm_start)
-            self.model.set_params(warm_start=False)
-            self.model.fit(X, y)
-            self.model.set_params(warm_start=True)
+            X         = df[self._feat_cols]
+            y_outcome = df['result'].apply(lambda x: 1 if x == 'WIN' else 0).tolist()
 
-            self.trades_seen = len(df)
-            self._save_model()
-            print(f"✅ EVOLUCIÓN NOCTURNA: {len(df)} lecciones asimiladas | "
-                  f"peso IA: {self._ai_weight():.0%}")
+            Xs = self._fit_scaler_and_scale(X)
+            w  = self._compute_weights(y_outcome)
+
+            # Reentrenamiento completo: resetear n_estimators a base
+            self.model_outcome = RandomForestClassifier(
+                n_estimators=self.BASE_ESTIMATORS,
+                random_state=42,
+                warm_start=True,
+                class_weight=w,
+            )
+            self.model_outcome.fit(Xs, y_outcome)
+
+            # Modelo SL
+            if 'sl_was_used' in df.columns and 'sl_was_hit' in df.columns:
+                df_sl = df.dropna(subset=['sl_was_used', 'sl_was_hit'])
+                if len(df_sl) >= self.MIN_TRADES_FOR_AI:
+                    Xs_sl = self.scaler.transform(df_sl[self._feat_cols])
+                    y_sl  = ((df_sl['sl_was_used'] == 1) & (df_sl['sl_was_hit'] == 1)).astype(int).tolist()
+                    w_sl  = self._compute_weights(y_sl)
+                    self.model_sl = RandomForestClassifier(
+                        n_estimators=self.BASE_ESTIMATORS,
+                        random_state=42,
+                        warm_start=True,
+                        class_weight=w_sl,
+                    )
+                    self.model_sl.fit(Xs_sl, y_sl)
+                    print(f"🛡️  Modelo SL reentrenado con {len(df_sl)} trades.")
+
+            self.trades_seen       = len(df)
+            self._bootstrap_buffer = []
+            self._save_all()
+            self._print_feature_importance()
+            print(f"✅ EVOLUCIÓN NOCTURNA: {len(df)} lecciones | peso IA: {self._ai_weight():.0%}")
 
         except Exception as e:
             print(f"⚠️ Error en fase de sueño: {e}")
 
-    def _save_model(self):
-        os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
-        joblib.dump(self.model, self.model_path)
+    def _print_feature_importance(self):
+        try:
+            if not hasattr(self.model_outcome, 'feature_importances_'):
+                return
+            pairs = sorted(
+                zip(self._feat_cols, self.model_outcome.feature_importances_),
+                key=lambda x: x[1], reverse=True
+            )
+            print("\n📊 TOP FEATURES (lo que más influye en WIN/LOSS):")
+            for feat, imp in pairs[:5]:
+                bar = '█' * int(imp * 40)
+                print(f"   {feat:<20} {bar} {imp:.3f}")
+        except Exception:
+            pass
+
+    def _save_all(self):
+        os.makedirs('storage', exist_ok=True)
+        joblib.dump(self.model_outcome, self.outcome_path)
+        joblib.dump(self.model_sl,      self.sl_path)

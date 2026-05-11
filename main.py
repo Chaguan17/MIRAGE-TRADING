@@ -11,20 +11,16 @@ import data_engine
 from datetime import datetime, time as dtime
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# UTILIDADES
-# ──────────────────────────────────────────────────────────────────────────────
-
 def check_for_updates(last_mod_times):
-    files_to_watch = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py']
+    files   = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py']
     updated = False
-    for file in files_to_watch:
+    for f in files:
         try:
-            if os.path.exists(file):
-                t = os.path.getmtime(file)
-                if t > last_mod_times.get(file, 0):
+            if os.path.exists(f):
+                t = os.path.getmtime(f)
+                if t > last_mod_times.get(f, 0):
                     updated = True
-                    last_mod_times[file] = t
+                    last_mod_times[f] = t
         except Exception:
             pass
     return updated, last_mod_times
@@ -36,15 +32,11 @@ def is_sleep_time():
     end   = dtime(config.SLEEP_END_HOUR,   config.SLEEP_END_MINUTE)
     if start <= end:
         return start <= now < end
-    return now >= start or now < end   # ventana que cruza medianoche
+    return now >= start or now < end
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ──────────────────────────────────────────────────────────────────────────────
 
 def main():
-    print("🤖 BIENVENIDO A MIRAGE TRADING — Sistema Autodependiente")
+    print("🤖 MIRAGE TRADING — Sistema Autodependiente v2")
 
     api    = MirageBinance(config.API_KEY, config.API_SECRET, paper_trading=True)
     engine = DataEngine()
@@ -52,7 +44,6 @@ def main():
     rm     = risk_manager.RiskManager()
     tr     = tracker.TradeTracker()
 
-    # ── Conectar cerebro ↔ tracker (feedback inmediato tras cada trade) ──────
     tr.set_on_close_callback(brain.online_update)
 
     if not api.check_connection():
@@ -60,22 +51,20 @@ def main():
 
     account_balance = api.get_balance()
 
-    # ── Estudio histórico inicial ────────────────────────────────────────────
     print("📚 Descargando datos históricos...")
     raw_data = api.get_historical_data(config.SYMBOL, config.TIMEFRAME, limit=1000)
     if raw_data is None:
-        print("❌ Error descargando datos. Abortando.")
+        print("❌ Error descargando datos.")
         return
     engine.prepare_features(raw_data)
-    brain.nightly_retrain()   # intento inicial (puede que no haya suficientes datos aún)
+    brain.nightly_retrain()
 
     sleep_start = dtime(config.SLEEP_START_HOUR, config.SLEEP_START_MINUTE)
     sleep_end   = dtime(config.SLEEP_END_HOUR,   config.SLEEP_END_MINUTE)
-    ai_w        = brain._ai_weight()
     print(
-        f"\n🚀 {config.SYMBOL} bajo vigilancia."
+        f"\n🚀 {config.SYMBOL} en vigilancia"
         f" | Sueño: {sleep_start.strftime('%H:%M')}→{sleep_end.strftime('%H:%M')}"
-        f" | Peso IA inicial: {ai_w:.0%}\n"
+        f" | Peso IA: {brain._ai_weight():.0%}\n"
     )
 
     files_to_watch = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py']
@@ -84,10 +73,10 @@ def main():
 
     while True:
 
-        # ── 🌙 CICLO CIRCADIANO ──────────────────────────────────────────────
+        # ── CICLO CIRCADIANO ─────────────────────────────────────────────────
         if is_sleep_time():
             if not already_slept:
-                print(f"\n🌙 MODO SUEÑO ({datetime.now().strftime('%H:%M')}) — Reentrenando cerebro...")
+                print(f"\n🌙 MODO SUEÑO ({datetime.now().strftime('%H:%M')})")
                 brain.nightly_retrain()
                 already_slept = True
                 print(f"⏳ Durmiendo hasta las {sleep_end.strftime('%H:%M')}...")
@@ -95,7 +84,7 @@ def main():
             continue
 
         if already_slept:
-            print(f"\n☀️  DESPERTANDO — Cerebro actualizado. Peso IA: {brain._ai_weight():.0%}")
+            print(f"\n☀️  DESPERTANDO | Peso IA: {brain._ai_weight():.0%}")
             already_slept = False
 
         # ── BUCLE OPERATIVO ──────────────────────────────────────────────────
@@ -103,78 +92,85 @@ def main():
             # A. Hot-Reload
             has_updates, last_mod_times = check_for_updates(last_mod_times)
             if has_updates:
-                print("\n💡 Actualización detectada — Re-sincronizando...")
-                memoria_temporal = tr.active_trades
+                print("\n💡 Actualización detectada — recargando módulos...")
+                memoria = tr.active_trades
                 importlib.reload(risk_manager)
                 importlib.reload(config)
                 importlib.reload(tracker)
                 importlib.reload(data_engine)
-                rm     = risk_manager.RiskManager()
-                tr     = tracker.TradeTracker()
-                tr.active_trades = memoria_temporal
-                tr.set_on_close_callback(brain.online_update)   # reconectar callback
+                rm = risk_manager.RiskManager()
+                tr = tracker.TradeTracker()
+                tr.active_trades = memoria
+                tr.set_on_close_callback(brain.online_update)
                 engine = data_engine.DataEngine()
-                print("✅ Sistemas actualizados.\n")
+                print("✅ Módulos actualizados.\n")
 
-            # B. Datos de mercado
-            live_data = api.get_historical_data(config.SYMBOL, config.TIMEFRAME, limit=100)
+            # B. Mercado
+            live_data = api.get_historical_data(config.SYMBOL, config.TIMEFRAME, limit=200)
             if live_data is None:
                 continue
 
-            current_price       = live_data.iloc[-1]['close']
-            features            = engine.prepare_features(live_data)
-            last_features_row   = features.iloc[-1].to_dict()
-            atr_current         = last_features_row['ATR']
+            current_price = live_data.iloc[-1]['close']
+            features      = engine.prepare_features(live_data)
+            last_row      = features.iloc[-1].to_dict()
+            atr_current   = last_row['ATR']
 
             if not api.paper_trading:
                 account_balance = api.get_balance()
 
-            # C. Vigilancia de trades activos (cierre + feedback al cerebro)
+            # C. Vigilancia → cierra trades y retroalimenta al cerebro
             tr.update_market_price(current_price)
 
             # D. Dashboard
             total, wins, losses, wr, pnl = tr.get_dashboard_stats()
             now_str = datetime.now().strftime('%H:%M:%S')
-            ai_pct  = brain._ai_weight()
-            print("\n" + "═" * 58)
+            print("\n" + "═" * 60)
             print(f"📊 MIRAGE  [{now_str}]  BTC: {current_price:>10,.1f} USDT")
-            print(f"🏆 {wins}W / {losses}L  WR: {wr:.1f}%  PnL: {pnl:+.4f} USDT  |  Ops: {total}")
-            print(f"🧠 Peso IA: {ai_pct:.0%}  ({brain.trades_seen} experiencias)  |  Balance: {account_balance:.2f} USDT")
-            print("═" * 58)
+            print(f"🏆 {wins}W / {losses}L  WR: {wr:.1f}%  PnL: {pnl:+.4f}  Ops: {total}")
+            print(f"🧠 Exp: {brain.trades_seen}  Peso IA: {brain._ai_weight():.0%}  Balance: {account_balance:.2f} USDT")
+            print("═" * 60)
 
-            # E. Predicción
-            action_code, confidence, method_name = brain.get_consensus_prediction(last_features_row)
+            # E. Predicción — incluye decisión de SL
+            action_code, confidence, method_name, use_sl = brain.get_consensus_prediction(last_row)
 
             # F. Ejecución
-            if action_code is not None and confidence > 0.55 and len(tr.active_trades) == 0:
+            if action_code is not None and confidence > config.MIN_CONFIDENCE and len(tr.active_trades) == 0:
                 action_str = "LONG" if action_code == 1 else "SHORT"
-                print(f"\n🧠 SEÑAL: {action_str}  |  Método: {method_name.upper()}  |  Confianza: {confidence:.2%}")
+                sl, tp     = rm.calculate_dynamic_stops(current_price, atr_current, action_str)
+                size       = rm.calculate_position_size(
+                    account_balance, current_price,
+                    sl if use_sl else None,
+                )
 
-                sl, tp = rm.calculate_dynamic_stops(current_price, atr_current, action_str)
-                size   = rm.calculate_position_size(account_balance, current_price, sl)
+                sl_display = f"SL={sl:.2f}" if use_sl else "SIN SL (cierre por señal contraria)"
+                print(f"\n🧠 SEÑAL: {action_str}  |  {method_name.upper()}  |  conf: {confidence:.2%}")
+                print(f"🛡️  TP={tp:.2f}  |  {sl_display}  |  size={size} BTC")
 
-                print(f"🛡️  SL: {sl:.2f}  |  TP: {tp:.2f}  |  Size: {size} BTC")
-                tr.register_trade(action_str, current_price, size, sl, tp, last_features_row)
+                tr.register_trade(action_str, current_price, size, sl, tp, last_row, use_sl)
 
             else:
                 if len(tr.active_trades) > 0:
-                    t = tr.active_trades[0]
-                    floating_pnl = (
+                    t    = tr.active_trades[0]
+                    fpnl = (
                         (current_price - t['entry_price']) * t['size']
                         if t['action'] == 'LONG'
                         else (t['entry_price'] - current_price) * t['size']
                     )
-                    pnl_emoji = "📈" if floating_pnl >= 0 else "📉"
+                    ep      = "📈" if fpnl >= 0 else "📉"
+                    sl_line = (
+                        f"SL={t['sl']:.2f}  (faltan {abs(current_price - t['sl']):.2f})"
+                        if t['use_sl'] else "SIN SL"
+                    )
                     print(
-                        f"\n⏳ Vigilando {t['action']} @ entrada {t['entry_price']:.2f}\n"
+                        f"\n⏳ Vigilando {t['action']} @ {t['entry_price']:.2f}\n"
                         f"   Precio actual : {current_price:.2f}\n"
                         f"   TP (objetivo) : {t['tp']:.2f}  (faltan {abs(current_price - t['tp']):.2f} USD)\n"
-                        f"   SL (stop)     : {t['sl']:.2f}  (faltan {abs(current_price - t['sl']):.2f} USD)\n"
-                        f"   {pnl_emoji} PnL flotante  : {floating_pnl:+.4f} USDT"
+                        f"   Stop Loss     : {sl_line}\n"
+                        f"   {ep} PnL flotante : {fpnl:+.4f} USDT"
                     )
                 else:
                     side = "LONG" if action_code == 1 else ("SHORT" if action_code == 0 else "—")
-                    print(f"⏳ Sin señal suficiente  |  Mejor: {method_name} {side}  conf: {confidence:.2%}")
+                    print(f"⏳ Sin señal  |  {method_name} {side}  conf: {confidence:.2%}")
 
             time.sleep(60)
 
