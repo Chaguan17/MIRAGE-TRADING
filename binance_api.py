@@ -50,7 +50,7 @@ class MirageBinance:
             print(f"⚠️ Error obteniendo balance: {e}")
             return 0.0
 
-    def get_historical_data(self, symbol, timeframe='15m', limit=500):
+    def get_historical_data(self, symbol, timeframe='1m', limit=500):
         try:
             bars = self.client.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
             df   = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])

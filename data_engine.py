@@ -1,13 +1,9 @@
 import pandas as pd
+import numpy as np
 import pandas_ta as ta
 
 
 class DataEngine:
-    """
-    Motor sensorial de Mirage.
-    Genera ~13 features ricas para que el cerebro aprenda con contexto real.
-    """
-
     def __init__(self):
         self._bb_upper_col = None
         self._bb_lower_col = None
@@ -19,7 +15,7 @@ class DataEngine:
         df['EMA_20']        = ta.ema(df['close'], length=20)
         df['EMA_50']        = ta.ema(df['close'], length=50)
         df['EMA_200']       = ta.ema(df['close'], length=200)
-        df['EMA_diff']      = df['EMA_200'] - df['EMA_50']
+        df['EMA_diff']      = df['EMA_20'] - df['EMA_50']
         df['EMA_diff_norm'] = df['EMA_diff'] / (df['close'] * 0.001 + 1e-9)
 
         # ── 2. MOMENTUM ─────────────────────────────────────────────────────
@@ -59,15 +55,40 @@ class DataEngine:
         df['volume_ma']    = ta.ema(df['volume'], length=20)
         df['volume_ratio'] = df['volume'] / (df['volume_ma'] + 1e-9)
 
-        # ── 5. SEÑALES BINARIAS DE CONTEXTO ────────────────────────────────
-        df['trend_signal']    = (df['EMA_20']    > df['EMA_50']).astype(int)
-        df['above_ema200']    = (df['close']      > df['EMA_200']).astype(int)
-        df['momentum_signal'] = (df['MACD_hist']  > 0).astype(int)
+        # ── 5. SEÑALES BINARIAS ──────────────────────────────────────────────
+        df['trend_signal']    = (df['EMA_20']   > df['EMA_50']).astype(int)
+        df['above_ema200']    = (df['close']     > df['EMA_200']).astype(int)
+        df['momentum_signal'] = (df['MACD_hist'] > 0).astype(int)
+
+        # ── 6. VWAP ─────────────────────────────────────────────────────────
+        typical_price  = (df['high'] + df['low'] + df['close']) / 3
+        cum_tp_vol     = (typical_price * df['volume']).cumsum()
+        cum_vol        = df['volume'].cumsum()
+        df['VWAP']     = cum_tp_vol / (cum_vol + 1e-9)
+        df['VWAP_dist'] = (df['close'] - df['VWAP']) / df['VWAP'] * 100
+
+        # ── 7. ORDERFLOW DELTA ──────────────────────────────────────────────
+        candle_range      = df['high'] - df['low'] + 1e-9
+        close_position    = (df['close'] - df['low']) / candle_range
+        df['delta']       = (close_position - 0.5) * 2 * df['volume']
+        df['delta_cum5']  = df['delta'].rolling(5).sum()
+        df['delta_cum10'] = df['delta'].rolling(10).sum()
+        price_change5     = df['close'].diff(5)
+        df['delta_div']   = np.sign(price_change5) * np.sign(df['delta_cum5'])
+
+        # ── 8. WYCKOFF ──────────────────────────────────────────────────────
+        df['price_slope'] = df['close'].diff(10) / (df['close'].shift(10) + 1e-9) * 100
+        df['range_pct']   = (df['high'].rolling(20).max() - df['low'].rolling(20).min()) / df['close'] * 100
+
+        # ── 9. ESTRUCTURA SMC ────────────────────────────────────────────────
+        df['struct_high']      = df['high'].rolling(20).max()
+        df['struct_low']       = df['low'].rolling(20).min()
+        df['near_struct_high'] = (abs(df['close'] - df['struct_high']) / df['close'] < 0.002).astype(int)
+        df['near_struct_low']  = (abs(df['close'] - df['struct_low'])  / df['close'] < 0.002).astype(int)
 
         return df.dropna()
 
     def get_feature_columns(self):
-        """Lista canónica de features — única fuente de verdad para brain y tracker."""
         return [
             'RSI', 'ATR', 'ATR_pct',
             'EMA_diff', 'EMA_diff_norm',
@@ -75,4 +96,8 @@ class DataEngine:
             'BB_width', 'BB_position',
             'volume_ratio',
             'trend_signal', 'above_ema200', 'momentum_signal',
+            'VWAP_dist',
+            'delta_cum5', 'delta_div',
+            'price_slope', 'range_pct',
+            'near_struct_high', 'near_struct_low',
         ]

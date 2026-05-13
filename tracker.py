@@ -10,6 +10,8 @@ class TradeTracker:
         'RSI', 'ATR', 'ATR_pct', 'EMA_diff', 'EMA_diff_norm',
         'MACD', 'MACD_hist', 'BB_width', 'BB_position',
         'volume_ratio', 'trend_signal', 'above_ema200', 'momentum_signal',
+        'VWAP_dist', 'delta_cum5', 'delta_div',
+        'price_slope', 'range_pct', 'near_struct_high', 'near_struct_low',
         'sl_was_used', 'sl_was_hit',
     ]
 
@@ -30,17 +32,15 @@ class TradeTracker:
     def set_on_close_callback(self, fn):
         self._on_close_cb = fn
 
-    # ──────────────────────────────────────────────────────────────────────────
-
     def _ensure_storage(self):
         if not os.path.exists('storage'):
             os.makedirs('storage')
         if not os.path.exists(self.filepath):
             pd.DataFrame(columns=self.COLUMNAS).to_csv(self.filepath, index=False)
         else:
-            df_check  = pd.read_csv(self.filepath, nrows=0)
-            existing  = list(df_check.columns)
-            new_cols  = [c for c in self.COLUMNAS if c not in existing]
+            df_check = pd.read_csv(self.filepath, nrows=0)
+            existing = list(df_check.columns)
+            new_cols = [c for c in self.COLUMNAS if c not in existing]
             if new_cols:
                 print(f"⚠️ Migrando CSV — añadiendo columnas: {new_cols}")
                 df_old = pd.read_csv(self.filepath)
@@ -61,13 +61,14 @@ class TradeTracker:
         except Exception as e:
             print(f"⚠️ Error al recuperar memoria: {e}")
 
-    # ──────────────────────────────────────────────────────────────────────────
-
     def register_trade(self, action, entry_price, size, sl, tp, features, use_sl):
-        """
-        use_sl: bool — si False el trade no tiene SL,
-        solo cierra por TP o señal contraria.
-        """
+        feat_cols = [
+            'RSI', 'ATR', 'ATR_pct', 'EMA_diff', 'EMA_diff_norm',
+            'MACD', 'MACD_hist', 'BB_width', 'BB_position',
+            'volume_ratio', 'trend_signal', 'above_ema200', 'momentum_signal',
+            'VWAP_dist', 'delta_cum5', 'delta_div',
+            'price_slope', 'range_pct', 'near_struct_high', 'near_struct_low',
+        ]
         trade = {
             'timestamp':   datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'action':      action,
@@ -77,11 +78,7 @@ class TradeTracker:
             'tp':          tp,
             'use_sl':      use_sl,
             '_features':   features,
-            **{col: round(float(features.get(col, 0)), 6) for col in [
-                'RSI', 'ATR', 'ATR_pct', 'EMA_diff', 'EMA_diff_norm',
-                'MACD', 'MACD_hist', 'BB_width', 'BB_position',
-                'volume_ratio', 'trend_signal', 'above_ema200', 'momentum_signal',
-            ]},
+            **{col: round(float(features.get(col, 0)), 6) for col in feat_cols},
         }
         self.active_trades.append(trade)
         sl_str = f"SL={sl:.2f}" if use_sl else "SIN SL"
@@ -96,7 +93,7 @@ class TradeTracker:
                     close_price, result, sl_was_hit = trade['tp'], 'WIN', False
                 elif trade['use_sl'] and current_price <= trade['sl']:
                     close_price, result, sl_was_hit = trade['sl'], 'LOSS', True
-            else:  # SHORT
+            else:
                 if current_price <= trade['tp']:
                     close_price, result, sl_was_hit = trade['tp'], 'WIN', False
                 elif trade['use_sl'] and current_price >= trade['sl']:
@@ -108,7 +105,6 @@ class TradeTracker:
                     if trade['action'] == 'LONG'
                     else (trade['entry_price'] - close_price) * trade['size']
                 )
-
                 self._save_to_csv(trade, close_price, result, pnl, sl_was_hit)
                 self._update_live_stats(result, pnl)
 
@@ -120,11 +116,18 @@ class TradeTracker:
                     )
 
                 self.active_trades.remove(trade)
-                emoji    = "🏆" if result == 'WIN' else "💀"
-                sl_info  = "(SL tocado)" if sl_was_hit else "(TP alcanzado)"
+                emoji   = "🏆" if result == 'WIN' else "💀"
+                sl_info = "(SL tocado)" if sl_was_hit else "(TP alcanzado)"
                 print(f"{emoji} Trade cerrado: {result} {sl_info} | PnL: {pnl:+.4f} USDT")
 
     def _save_to_csv(self, trade, close_price, result, pnl, sl_was_hit):
+        feat_cols = [
+            'RSI', 'ATR', 'ATR_pct', 'EMA_diff', 'EMA_diff_norm',
+            'MACD', 'MACD_hist', 'BB_width', 'BB_position',
+            'volume_ratio', 'trend_signal', 'above_ema200', 'momentum_signal',
+            'VWAP_dist', 'delta_cum5', 'delta_div',
+            'price_slope', 'range_pct', 'near_struct_high', 'near_struct_low',
+        ]
         row = {
             'timestamp':   trade['timestamp'],
             'action':      trade['action'],
@@ -135,11 +138,7 @@ class TradeTracker:
             'pnl_usdt':    round(pnl, 4),
             'sl_was_used': int(trade['use_sl']),
             'sl_was_hit':  int(sl_was_hit) if sl_was_hit is not None else 0,
-            **{col: trade.get(col, 0) for col in [
-                'RSI', 'ATR', 'ATR_pct', 'EMA_diff', 'EMA_diff_norm',
-                'MACD', 'MACD_hist', 'BB_width', 'BB_position',
-                'volume_ratio', 'trend_signal', 'above_ema200', 'momentum_signal',
-            ]},
+            **{col: trade.get(col, 0) for col in feat_cols},
         }
         pd.DataFrame([row]).to_csv(self.filepath, mode='a', header=False, index=False)
 
