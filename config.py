@@ -62,11 +62,11 @@ MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_WAIT_SECONDS = 30
 
 # ── RESUMEN DIARIO ────────────────────────────────────────────────────────────
-DAILY_SUMMARY_HOUR   = 23
-DAILY_SUMMARY_MINUTE = 55
+DAILY_SUMMARY_HOUR   = 22
+DAILY_SUMMARY_MINUTE = 10
 
 # ── CICLO CIRCADIANO ──────────────────────────────────────────────────────────
-SLEEP_START_HOUR   = 0
+SLEEP_START_HOUR   = 22
 SLEEP_START_MINUTE = 0
-SLEEP_END_HOUR     = 0
+SLEEP_END_HOUR     = 22
 SLEEP_END_MINUTE   = 5

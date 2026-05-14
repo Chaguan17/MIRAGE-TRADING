@@ -186,6 +186,35 @@ def main():
             if cooldown_left > 0:
                 print(f"⏸️  Cooldown: {cooldown_left} vela(s)")
             print("═" * 64)
+            active_trade_info = None
+            if tr.active_trades:
+                t = tr.active_trades[0]
+                fpnl = (
+                    (current_price - t['entry_price']) * t['size']
+                    if t['action'] == 'LONG'
+                    else (t['entry_price'] - current_price) * t['size']
+                )
+                active_trade_info = {
+                    'action':       t['action'],
+                    'entry_price':  t['entry_price'],
+                    'tp':           t['tp'],
+                    'sl':           t['sl'],
+                    'use_sl':       t['use_sl'],
+                    'current_price': current_price,
+                    'floating_pnl': round(fpnl, 4),
+                }
+
+            tg.write_status({
+                'wins':          wins,
+                'losses':        losses,
+                'pnl':           round(pnl, 4),
+                'balance':       account_balance,
+                'trades_seen':   brain.trades_seen,
+                'ai_weight':     brain._ai_weight(),
+                'symbol':        config.SYMBOL,
+                'current_price': current_price,
+                'session':       session_name,
+            }, active_trade_info)
 
             # G. Predicción con 9 métodos
             action_code, confidence, method_name, use_sl = brain.get_consensus_prediction(
