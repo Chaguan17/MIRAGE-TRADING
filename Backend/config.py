@@ -1,6 +1,9 @@
 import os
 from dotenv import load_dotenv
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -8,7 +11,7 @@ API_KEY    = os.getenv('BINANCE_API_KEY')
 API_SECRET = os.getenv('BINANCE_API_SECRET')
 
 if not API_KEY or not API_SECRET:
-    print("⚠️ ADVERTENCIA: No se detectaron las llaves API. Revisa tu archivo .env")
+    logger.warning("Missing Binance API credentials in .env")
 
 SETTINGS_PATH = "storage/settings.json"
 
@@ -17,15 +20,33 @@ def load_dynamic_settings():
         try:
             with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in {SETTINGS_PATH}: {e}")
+        except Exception as e:
+            logger.error(f"Error loading settings from {SETTINGS_PATH}: {e}")
     return {}
+
+def validate_sleep_config(start_hour, start_minute, end_hour, end_minute):
+    """Validate that sleep configuration makes sense."""
+    if not (0 <= start_hour <= 23 and 0 <= start_minute <= 59):
+        logger.error(f"Invalid sleep start time: {start_hour}:{start_minute}")
+        return False
+    if not (0 <= end_hour <= 23 and 0 <= end_minute <= 59):
+        logger.error(f"Invalid sleep end time: {end_hour}:{end_minute}")
+        return False
+    # Warn if sleep window is very small
+    from datetime import time as dtime
+    start = dtime(start_hour, start_minute)
+    end = dtime(end_hour, end_minute)
+    if start == end:
+        logger.warning("Sleep start time equals end time - bot will not sleep properly")
+    return True
 
 dyn = load_dynamic_settings()
 
 # ── MERCADO ───────────────────────────────────────────────────────────────────
 PARES_ACTIVOS = dyn.get('PARES_ACTIVOS', ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']) # Soporte Multi-Pair
-SYMBOL    = dyn.get('SYMBOL', 'BTCUSDT')
+SYMBOL    = dyn.get('SYMBOL', 'BTCUSDT' )
 TIMEFRAME = dyn.get('TIMEFRAME', '1m')
 LEVERAGE  = int(dyn.get('LEVERAGE', 10))
 
@@ -85,3 +106,5 @@ SLEEP_START_HOUR   = int(dyn.get('SLEEP_START_HOUR', 22))
 SLEEP_START_MINUTE = int(dyn.get('SLEEP_START_MINUTE', 0))
 SLEEP_END_HOUR     = int(dyn.get('SLEEP_END_HOUR', 22))
 SLEEP_END_MINUTE   = int(dyn.get('SLEEP_END_MINUTE', 5))
+
+validate_sleep_config(SLEEP_START_HOUR, SLEEP_START_MINUTE, SLEEP_END_HOUR, SLEEP_END_MINUTE)

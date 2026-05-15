@@ -65,7 +65,7 @@ class DataEngine:
         cum_tp_vol     = (typical_price * df['volume']).cumsum()
         cum_vol        = df['volume'].cumsum()
         df['VWAP']     = cum_tp_vol / (cum_vol + 1e-9)
-        df['VWAP_dist'] = (df['close'] - df['VWAP']) / df['VWAP'] * 100
+        df['VWAP_dist'] = (df['close'] - df['VWAP']) / (df['VWAP'] + 1e-9) * 100
 
         # ── 7. ORDERFLOW DELTA ──────────────────────────────────────────────
         candle_range      = df['high'] - df['low'] + 1e-9

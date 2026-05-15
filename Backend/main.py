@@ -2,6 +2,7 @@ import time
 import os
 import json
 import importlib
+import logging
 import config
 from binance_api import MirageBinance
 from data_engine import DataEngine
@@ -10,6 +11,9 @@ import risk_manager
 import tracker
 import data_engine
 from datetime import datetime, time as dtime
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # ==========================================
 # ⚙️ CONFIGURACIÓN MULTI-PAIR
@@ -27,8 +31,8 @@ def check_for_updates(last_mod_times):
                 if t > last_mod_times.get(f, 0):
                     updated = True
                     last_mod_times[f] = t
-        except Exception:
-            pass
+        except OSError as e:
+            logger.warning(f"Could not check modification time for {f}: {e}")
     return updated, last_mod_times
 
 def is_sleep_time():
@@ -159,10 +163,15 @@ def main():
                     global_btc_features = features
 
                 # Trailing stop
-                for t in b['tr'].active_trades:
-                    if 'is_trailing' not in t: t['is_trailing'] = False
+                with b['tr']._trades_lock:
+                    trades_to_process = list(b['tr'].active_trades)
+
+                for t in trades_to_process:
+                    if 'is_trailing' not in t:
+                        t['is_trailing'] = False
                     new_sl = b['rm'].calculate_trailing_stop(t, current_price, atr_current)
                     if new_sl is not None and new_sl != t['sl']:
+                        logger.info(f"{sym} trailing stop updated: {t['sl']} → {new_sl}")
                         print(f"🔺 {sym} Trailing stop: {t['sl']} → {new_sl}")
                         t['sl'] = new_sl
                         t['use_sl'] = True
@@ -190,7 +199,10 @@ def main():
                     print(f"   ⏸️  Cooldown: {b['cooldown_left']} vela(s)")
 
                 # Preparar datos flotantes para la web
-                for t in b['tr'].active_trades:
+                with b['tr']._trades_lock:
+                    active_trades_snapshot = list(b['tr'].active_trades)
+
+                for t in active_trades_snapshot:
                     fpnl = (current_price - t['entry_price']) * t['size'] if t['action'] == 'LONG' else (t['entry_price'] - current_price) * t['size']
                     web_operaciones_activas.append({
                         "pair": sym,
@@ -229,6 +241,7 @@ def main():
 
             except Exception as e:
                 b['consecutive_errors'] += 1
+                logger.error(f"Error processing {sym}: {e}", exc_info=True)
                 print(f"⚠️ Error en {sym}: {e}")
         
         print("═" * 64)
@@ -244,8 +257,10 @@ def main():
             }
             with open("storage/live_state.json", "w", encoding="utf-8") as f:
                 json.dump(estado_en_vivo, f)
+        except IOError as e:
+            logger.error(f"Failed to write live_state.json: {e}")
         except Exception as e:
-            pass
+            logger.error(f"Unexpected error updating dashboard: {e}")
 
         time.sleep(60)
 

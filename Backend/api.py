@@ -3,16 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import json
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Mirage Trading API")
 
-# Esto permite que nuestra web (frontend) se comunique con esta API sin errores de seguridad
+allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # En producción cambiaremos esto por la URL de tu web
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 CONFIG_PATH = "storage/settings.json"
@@ -44,7 +47,7 @@ def get_dashboard_data():
             with open("storage/live_state.json", "r", encoding="utf-8") as f:
                 data = json.load(f)
         except FileNotFoundError:
-            # Si el bot acaba de arrancar y aún no ha creado el archivo
+            logger.info("live_state.json not found, returning default data")
             data = {
                 "pnl_total": 0, "win_rate": 0, "total_operaciones": 0, "operaciones_activas": []
             }
@@ -53,17 +56,21 @@ def get_dashboard_data():
         try:
             df = pd.read_csv("storage/trade_history.csv")
             df['pnl_acumulado'] = df['pnl_usdt'].cumsum()
-            
-            # Gráfica: últimas 30 operaciones
+
             data["chart_data"] = df.tail(30)[['timestamp', 'pnl_acumulado']].rename(columns={'pnl_acumulado': 'pnl', 'timestamp': 'time'}).to_dict(orient="records")
-            # Historial inferior: últimas 5
             data["ultimas_operaciones"] = df.tail(100).to_dict(orient="records")
-        except:
+        except FileNotFoundError:
+            logger.warning("trade_history.csv not found")
+            data["chart_data"] = []
+            data["ultimas_operaciones"] = []
+        except Exception as e:
+            logger.error(f"Error reading trade history: {e}")
             data["chart_data"] = []
             data["ultimas_operaciones"] = []
 
         return data
     except Exception as e:
+        logger.error(f"Error in get_dashboard_data: {e}")
         return {"error": str(e)}
     
 
@@ -72,7 +79,14 @@ def get_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except FileNotFoundError:
+        logger.error(f"Config file not found at {CONFIG_PATH}")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in config file: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Error reading config: {e}")
         return {}
 
 @app.post("/api/config")

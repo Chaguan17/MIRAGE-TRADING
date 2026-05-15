@@ -2,6 +2,7 @@ import os
 import joblib
 import pandas as pd
 import numpy as np
+import logging
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
@@ -11,6 +12,8 @@ from methods import (
     smc_structure, vwap_method, liquidity_zones,
     orderflow, wyckoff, btc_correlation,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MirageBrain:
@@ -62,12 +65,15 @@ class MirageBrain:
         try:
             if os.path.exists('storage/trade_history.csv'):
                 df = pd.read_csv('storage/trade_history.csv')
-                # Filtramos para contar solo las operaciones de esta moneda
                 if 'pair' in df.columns:
                     return len(df[df['pair'] == self.symbol])
                 return len(df)
-        except Exception:
-            pass
+        except FileNotFoundError:
+            logger.info(f"trade_history.csv not found for {self.symbol}")
+        except pd.errors.EmptyDataError:
+            logger.warning(f"trade_history.csv is empty for {self.symbol}")
+        except Exception as e:
+            logger.error(f"Error counting historical trades for {self.symbol}: {e}")
         return 0
 
     def _get_session_weight(self):
@@ -94,8 +100,10 @@ class MirageBrain:
         try:
             if hasattr(self.scaler, 'mean_'):
                 return self.scaler.transform(X)
-        except Exception:
-            pass
+        except ValueError as e:
+            logger.warning(f"Scaler transform failed for {self.symbol}: {e}, returning unscaled data")
+        except Exception as e:
+            logger.error(f"Unexpected error in _scale for {self.symbol}: {e}")
         return X.values
 
     def _fit_scaler_and_scale(self, X):
@@ -203,7 +211,11 @@ class MirageBrain:
             Xs    = self._scale(X)
             proba = self.model_outcome.predict_proba(Xs)[0]
             return proba[1] if action_code == 1 else (1 - proba[1])
-        except Exception:
+        except IndexError as e:
+            logger.warning(f"Prediction index error for {self.symbol}: {e}")
+            return 0.5
+        except Exception as e:
+            logger.error(f"Error in _predict_outcome for {self.symbol}: {e}")
             return 0.5
 
     def _predict_use_sl(self, X):
@@ -212,7 +224,11 @@ class MirageBrain:
                 return True
             Xs = self._scale(X)
             return self.model_sl.predict_proba(Xs)[0][1] >= 0.5
-        except Exception:
+        except IndexError as e:
+            logger.warning(f"SL prediction index error for {self.symbol}: {e}")
+            return True
+        except Exception as e:
+            logger.error(f"Error in _predict_use_sl for {self.symbol}: {e}")
             return True
 
     def online_update(self, features_dict, result_label, sl_was_used, sl_was_hit):
@@ -324,8 +340,10 @@ class MirageBrain:
             print(f"   Precision : {prec:.2%}")
             print(f"   Recall    : {rec:.2%}")
             print(f"   F1-Score  : {f1:.2%}  ← si sube sesión a sesión, el bot aprende")
-        except Exception:
-            pass
+        except ValueError as e:
+            logger.warning(f"Metrics calculation error for {self.symbol}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error printing metrics for {self.symbol}: {e}")
 
     def _print_feature_importance(self):
         try:
@@ -339,8 +357,10 @@ class MirageBrain:
             for feat, imp in pairs[:7]:
                 bar = '█' * int(imp * 40)
                 print(f"   {feat:<22} {bar} {imp:.3f}")
-        except Exception:
-            pass
+        except AttributeError as e:
+            logger.warning(f"Feature importance not available for {self.symbol}: {e}")
+        except Exception as e:
+            logger.error(f"Error printing feature importance for {self.symbol}: {e}")
 
     def _save_all(self):
         os.makedirs('storage', exist_ok=True)

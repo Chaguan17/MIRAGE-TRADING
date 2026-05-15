@@ -10,16 +10,21 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-// Paleta de colores Global Premium Dark Mode
+// Variables de entorno restauradas al 100%
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_WS_URL =
+  import.meta.env.VITE_API_WS_URL || "wss://stream.binance.com:9443/stream";
+
 const theme = {
-  bgApp: "#0f172a", // Slate 900
-  bgCard: "#1e293b", // Slate 800
-  border: "#334155", // Slate 700
-  textMain: "#f8fafc", // Slate 50
-  textMuted: "#94a3b8", // Slate 400
-  accent: "#3b82f6", // Blue 500
-  success: "#10b981", // Emerald 500
-  danger: "#f43f5e", // Rose 500
+  bgApp: "#0f172a",
+  bgCard: "#1e293b",
+  border: "#334155",
+  textMain: "#f8fafc",
+  textMuted: "#94a3b8",
+  accent: "#3b82f6",
+  success: "#10b981",
+  danger: "#f43f5e",
   successBg: "rgba(16, 185, 129, 0.1)",
   dangerBg: "rgba(244, 63, 94, 0.1)",
 };
@@ -29,8 +34,6 @@ const theme = {
 // ==========================================
 function SettingsView() {
   const navigate = useNavigate();
-
-  // Estado inicial con TODAS las variables de config.py
   const [config, setConfig] = useState({
     PAPER_BALANCE: 1000.0,
     RISK_PER_TRADE: 0.02,
@@ -52,7 +55,7 @@ function SettingsView() {
   });
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/api/config")
+    fetch(`${API_BASE_URL}/api/config`)
       .then((res) => res.json())
       .then((data) => setConfig((prev) => ({ ...prev, ...data })))
       .catch((err) => console.log("Error cargando config", err));
@@ -60,21 +63,18 @@ function SettingsView() {
 
   const saveSettings = async () => {
     try {
-      await fetch("http://127.0.0.1:8000/api/config", {
+      await fetch(`${API_BASE_URL}/api/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
       });
-      alert(
-        "Configuración guardada. Mirage aplicará los cambios automáticamente.",
-      );
+      alert("Configuración guardada correctamente.");
       navigate("/");
     } catch (error) {
       alert("Error al guardar la configuración.");
     }
   };
 
-  // Componente interno para no repetir tanto código en los inputs
   const ConfigInput = ({
     label,
     objKey,
@@ -131,14 +131,7 @@ function SettingsView() {
   );
 
   return (
-    <div
-      style={{
-        maxWidth: "1000px",
-        margin: "40px auto",
-        padding: "0 20px",
-        animation: "fadeIn 0.3s",
-      }}
-    >
+    <div style={{ maxWidth: "1000px", margin: "40px auto", padding: "0 20px" }}>
       <button
         onClick={() => navigate("/")}
         style={{
@@ -184,24 +177,12 @@ function SettingsView() {
               fontWeight: "bold",
               border: "none",
               cursor: "pointer",
-              fontSize: "14px",
             }}
           >
             Guardar Cambios
           </button>
         </h2>
 
-        {/* === SECCIÓN 1: OPERATIVA BÁSICA === */}
-        <h3
-          style={{
-            color: theme.textMain,
-            borderBottom: `1px solid ${theme.border}`,
-            paddingBottom: "10px",
-            marginTop: "30px",
-          }}
-        >
-          📊 Operativa y Capital
-        </h3>
         <div
           style={{
             display: "grid",
@@ -219,13 +200,11 @@ function SettingsView() {
             label="Riesgo por Trade (%)"
             objKey="RISK_PER_TRADE"
             step="0.01"
-            helpText="Ej: 0.02 = 2%"
           />
           <ConfigInput
             label="Confianza Mínima IA"
             objKey="MIN_CONFIDENCE"
             step="0.01"
-            helpText="Umbral para entrar al mercado"
           />
           <div>
             <label
@@ -251,7 +230,6 @@ function SettingsView() {
                 backgroundColor: theme.bgApp,
                 color: theme.textMain,
                 border: `1px solid ${theme.border}`,
-                fontSize: "14px",
               }}
             >
               <option value="1m">1 Minuto</option>
@@ -260,127 +238,46 @@ function SettingsView() {
               <option value="1h">1 Hora</option>
             </select>
           </div>
-        </div>
-
-        {/* === SECCIÓN 2: STOPS Y TAKE PROFITS === */}
-        <h3
-          style={{
-            color: theme.textMain,
-            borderBottom: `1px solid ${theme.border}`,
-            paddingBottom: "10px",
-            marginTop: "40px",
-          }}
-        >
-          🛡️ Gestión de Riesgo y Trailing
-        </h3>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: "20px",
-          }}
-        >
           <ConfigInput
-            label="Multiplicador Stop Loss (ATR)"
+            label="ATR Multiplier (SL)"
             objKey="ATR_MULTIPLIER"
             step="0.1"
           />
           <ConfigInput
-            label="Multiplicador Take Profit (ATR)"
+            label="TP Multiplier"
             objKey="TP_MULTIPLIER"
             step="0.1"
           />
           <ConfigInput
-            label="Activación Trailing Stop (%)"
+            label="Trailing Activation (%)"
             objKey="TRAILING_STOP_ACTIVATION"
             step="0.1"
-            helpText="Beneficio flotante para activarlo"
           />
           <ConfigInput
-            label="Distancia Trailing Stop (%)"
+            label="Trailing Distance (%)"
             objKey="TRAILING_STOP_DISTANCE"
             step="0.1"
           />
-        </div>
-
-        {/* === SECCIÓN 3: GESTIÓN DE RACHAS === */}
-        <h3
-          style={{
-            color: theme.textMain,
-            borderBottom: `1px solid ${theme.border}`,
-            paddingBottom: "10px",
-            marginTop: "40px",
-          }}
-        >
-          📉 Gestión de Rachas y Cooldown
-        </h3>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: "20px",
-          }}
-        >
+          <ConfigInput label="Max. Losses" objKey="MAX_CONSECUTIVE_LOSSES" />
           <ConfigInput
-            label="Max. Pérdidas Consecutivas"
-            objKey="MAX_CONSECUTIVE_LOSSES"
-          />
-          <ConfigInput
-            label="Reducción de Riesgo (Factor)"
+            label="Risk Reduction Factor"
             objKey="RISK_REDUCTION_FACTOR"
             step="0.1"
-            helpText="Si pierdes, el riesgo se multiplica por esto"
           />
+          <ConfigInput label="Max. Wins" objKey="MAX_CONSECUTIVE_WINS" />
           <ConfigInput
-            label="Max. Ganancias Consecutivas"
-            objKey="MAX_CONSECUTIVE_WINS"
-          />
-          <ConfigInput
-            label="Aumento de Riesgo (Factor)"
+            label="Risk Increase Factor"
             objKey="RISK_INCREASE_FACTOR"
             step="0.1"
-            helpText="Si ganas, el riesgo se multiplica por esto"
           />
+          <ConfigInput label="Cooldown Candles" objKey="COOLDOWN_CANDLES" />
+          <ConfigInput label="SMC Lookback" objKey="SMC_LOOKBACK" />
           <ConfigInput
-            label="Velas de Cooldown post-loss"
-            objKey="COOLDOWN_CANDLES"
-            helpText="Pausa obligatoria tras racha negativa"
-          />
-        </div>
-
-        {/* === SECCIÓN 4: ALGORITMOS === */}
-        <h3
-          style={{
-            color: theme.textMain,
-            borderBottom: `1px solid ${theme.border}`,
-            paddingBottom: "10px",
-            marginTop: "40px",
-          }}
-        >
-          🧠 Algoritmos Avanzados (SMC & Wyckoff)
-        </h3>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: "20px",
-          }}
-        >
-          <ConfigInput
-            label="Lookback SMC (Velas)"
-            objKey="SMC_LOOKBACK"
-            step="5"
-          />
-          <ConfigInput
-            label="Fuerza de Order Blocks (SMC)"
+            label="SMC OB Strength"
             objKey="SMC_OB_STRENGTH"
             step="0.1"
           />
-          <ConfigInput
-            label="Lookback Wyckoff (Velas)"
-            objKey="WYCKOFF_LOOKBACK"
-            step="10"
-          />
+          <ConfigInput label="Wyckoff Lookback" objKey="WYCKOFF_LOOKBACK" />
         </div>
       </div>
     </div>
@@ -388,7 +285,7 @@ function SettingsView() {
 }
 
 // ==========================================
-// VISTA 2: DASHBOARD PRINCIPAL
+// VISTA 2: DASHBOARD PRINCIPAL (TODO RESTAURADO)
 // ==========================================
 function Dashboard({
   data,
@@ -400,12 +297,33 @@ function Dashboard({
 }) {
   const navigate = useNavigate();
 
+  // Cálculo de PnL Live para las tarjetas superiores
+  const liveTotalPnL = useMemo(() => {
+    if (!data) return 0;
+    let closedPnl =
+      data.pnl_total -
+      (data.operaciones_activas?.reduce((acc, op) => acc + op.current_pnl, 0) ||
+        0);
+    let currentLive = 0;
+    data.operaciones_activas?.forEach((op) => {
+      const price = livePrices[op.pair];
+      if (price) {
+        const diff = price / op.entry - 1;
+        const side = op.type === "LONG" ? 1 : -1;
+        const posValue = op.position_value || 200;
+        currentLive += posValue * diff * side;
+      } else {
+        currentLive += op.current_pnl;
+      }
+    });
+    return (closedPnl + currentLive).toFixed(2);
+  }, [data, livePrices]);
+
   const filteredHistory = useMemo(() => {
     if (!data || !data.ultimas_operaciones) return [];
     let processed = [...data.ultimas_operaciones].reverse();
-    if (historyFilter !== "ALL") {
+    if (historyFilter !== "ALL")
       processed = processed.filter((op) => op.pair === historyFilter);
-    }
     return processed.slice(0, historyLimit);
   }, [data, historyFilter, historyLimit]);
 
@@ -419,10 +337,9 @@ function Dashboard({
           justifyContent: "center",
           backgroundColor: theme.bgApp,
           color: theme.accent,
-          fontFamily: "system-ui",
         }}
       >
-        <h2>Iniciando Terminal Mirage...</h2>
+        <h2>Cargando Mirage Terminal...</h2>
       </div>
     );
 
@@ -430,7 +347,6 @@ function Dashboard({
     <div
       style={{ maxWidth: "1400px", margin: "0 auto", animation: "fadeIn 0.3s" }}
     >
-      {/* HEADER */}
       <header
         style={{
           display: "flex",
@@ -447,7 +363,6 @@ function Dashboard({
               background: `linear-gradient(135deg, ${theme.accent}, #8b5cf6)`,
               padding: "10px",
               borderRadius: "12px",
-              boxShadow: "0 4px 15px rgba(59, 130, 246, 0.4)",
             }}
           >
             <svg
@@ -457,22 +372,13 @@ function Dashboard({
               fill="none"
               stroke="white"
               strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
             >
               <path d="M12 2L2 7l10 5 10-5-10-5z" />
               <path d="M2 17l10 5 10-5" />
               <path d="M2 12l10 5 10-5" />
             </svg>
           </div>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: "28px",
-              fontWeight: "800",
-              letterSpacing: "-0.5px",
-            }}
-          >
+          <h1 style={{ margin: 0, fontSize: "28px", fontWeight: "800" }}>
             MIRAGE{" "}
             <span style={{ fontWeight: "300", color: theme.textMuted }}>
               TERMINAL
@@ -495,7 +401,7 @@ function Dashboard({
         </button>
       </header>
 
-      {/* METRICS CARDS */}
+      {/* METRICAS */}
       <div
         style={{
           display: "grid",
@@ -510,131 +416,77 @@ function Dashboard({
             border: `1px solid ${theme.border}`,
             padding: "25px",
             borderRadius: "16px",
-            boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
           }}
         >
           <h4
             style={{
               margin: "0 0 10px 0",
               color: theme.textMuted,
-              fontSize: "14px",
+              fontSize: "12px",
               textTransform: "uppercase",
-              letterSpacing: "1px",
             }}
           >
-            Net PnL Global
+            Net PnL Global (Live)
           </h4>
           <h2
             style={{
               margin: 0,
               fontSize: "36px",
-              fontWeight: "800",
-              color: data.pnl_total >= 0 ? theme.success : theme.danger,
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
+              color: liveTotalPnL >= 0 ? theme.success : theme.danger,
             }}
           >
-            {data.pnl_total > 0 ? "+" : ""}
-            {data.pnl_total}
-            <span
-              style={{
-                fontSize: "14px",
-                padding: "4px 8px",
-                borderRadius: "20px",
-                backgroundColor:
-                  data.pnl_total >= 0 ? theme.successBg : theme.dangerBg,
-                color: data.pnl_total >= 0 ? theme.success : theme.danger,
-              }}
-            >
+            {liveTotalPnL > 0 ? "+" : ""}
+            {liveTotalPnL}{" "}
+            <span style={{ fontSize: "14px", color: theme.textMuted }}>
               USDT
             </span>
           </h2>
         </div>
-
         <div
           style={{
             backgroundColor: theme.bgCard,
             border: `1px solid ${theme.border}`,
             padding: "25px",
             borderRadius: "16px",
-            boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
           }}
         >
           <h4
             style={{
               margin: "0 0 10px 0",
               color: theme.textMuted,
-              fontSize: "14px",
+              fontSize: "12px",
               textTransform: "uppercase",
-              letterSpacing: "1px",
             }}
           >
-            Win Rate Global
+            Win Rate
           </h4>
-          <h2
-            style={{
-              margin: 0,
-              fontSize: "36px",
-              fontWeight: "800",
-              color: theme.textMain,
-            }}
-          >
-            {data.win_rate}%
-          </h2>
-          <div
-            style={{
-              marginTop: "10px",
-              height: "4px",
-              background: theme.border,
-              borderRadius: "2px",
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                height: "100%",
-                width: `${data.win_rate}%`,
-                background: `linear-gradient(90deg, ${theme.accent}, ${theme.success})`,
-              }}
-            ></div>
-          </div>
+          <h2 style={{ margin: 0, fontSize: "36px" }}>{data.win_rate}%</h2>
         </div>
-
         <div
           style={{
             backgroundColor: theme.bgCard,
             border: `1px solid ${theme.border}`,
             padding: "25px",
             borderRadius: "16px",
-            boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
           }}
         >
           <h4
             style={{
               margin: "0 0 10px 0",
               color: theme.textMuted,
-              fontSize: "14px",
+              fontSize: "12px",
               textTransform: "uppercase",
-              letterSpacing: "1px",
             }}
           >
             Total Trades
           </h4>
-          <h2
-            style={{
-              margin: 0,
-              fontSize: "36px",
-              fontWeight: "800",
-              color: theme.textMain,
-            }}
-          >
+          <h2 style={{ margin: 0, fontSize: "36px" }}>
             {data.total_operaciones}
           </h2>
         </div>
       </div>
 
-      {/* CHART SECTION */}
+      {/* GRAFICA */}
       <div
         style={{
           backgroundColor: theme.bgCard,
@@ -642,12 +494,9 @@ function Dashboard({
           padding: "25px",
           borderRadius: "16px",
           marginBottom: "30px",
-          boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
         }}
       >
-        <h3 style={{ margin: "0 0 20px 0", color: theme.textMain }}>
-          Evolución del Capital
-        </h3>
+        <h3 style={{ margin: "0 0 20px 0" }}>Evolución del Capital</h3>
         <div style={{ height: "350px", width: "100%" }}>
           <ResponsiveContainer>
             <AreaChart data={data.chart_data}>
@@ -671,16 +520,12 @@ function Dashboard({
                 tick={{ fill: theme.textMuted, fontSize: 12 }}
                 axisLine={false}
                 tickLine={false}
-                tickFormatter={(val) => `$${val}`}
               />
               <Tooltip
                 contentStyle={{
                   backgroundColor: theme.bgApp,
                   border: `1px solid ${theme.border}`,
-                  borderRadius: "8px",
-                  color: theme.textMain,
                 }}
-                itemStyle={{ color: theme.accent, fontWeight: "bold" }}
               />
               <Area
                 type="monotone"
@@ -695,412 +540,240 @@ function Dashboard({
         </div>
       </div>
 
-      {/* TABLES SECTION */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "30px" }}>
-        {/* Active Trades */}
-        <div
-          style={{
-            backgroundColor: theme.bgCard,
-            border: `1px solid ${theme.border}`,
-            padding: "25px",
-            borderRadius: "16px",
-            boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
-          }}
-        >
-          <h3
+      {/* TABLA ACTIVAS (COLUMNAS RESTAURADAS) */}
+      <div
+        style={{
+          backgroundColor: theme.bgCard,
+          border: `1px solid ${theme.border}`,
+          padding: "25px",
+          borderRadius: "16px",
+          marginBottom: "30px",
+        }}
+      >
+        <h3 style={{ margin: "0 0 20px 0" }}>Operaciones Activas</h3>
+        <div style={{ overflowX: "auto" }}>
+          <table
             style={{
-              margin: "0 0 20px 0",
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
+              width: "100%",
+              textAlign: "left",
+              borderCollapse: "collapse",
             }}
           >
-            <span
-              style={{
-                width: "10px",
-                height: "10px",
-                borderRadius: "50%",
-                backgroundColor:
-                  data.operaciones_activas?.length > 0
-                    ? theme.accent
-                    : theme.textMuted,
-                display: "inline-block",
-                boxShadow:
-                  data.operaciones_activas?.length > 0
-                    ? `0 0 10px ${theme.accent}`
-                    : "none",
-              }}
-            ></span>
-            Operaciones Activas
-          </h3>
-
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                textAlign: "left",
-                borderCollapse: "collapse",
-                fontSize: "15px",
-              }}
-            >
-              <thead>
-                <tr
-                  style={{
-                    color: theme.textMuted,
-                    borderBottom: `2px solid ${theme.border}`,
-                  }}
-                >
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Par
-                  </th>
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Lado
-                  </th>
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Entrada
-                  </th>
-                  <th
-                    style={{
-                      padding: "12px 10px",
-                      fontWeight: "500",
-                      color: theme.accent,
-                    }}
+            <thead>
+              <tr
+                style={{
+                  color: theme.textMuted,
+                  borderBottom: `2px solid ${theme.border}`,
+                }}
+              >
+                <th style={{ padding: "12px 10px" }}>Par</th>
+                <th>Lado</th>
+                <th>Entrada</th>
+                <th style={{ color: theme.accent }}>Precio Actual</th>
+                <th style={{ color: theme.success }}>Take Profit</th>
+                <th style={{ color: theme.danger }}>Stop Loss</th>
+                <th style={{ textAlign: "right" }}>PnL Flotante</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.operaciones_activas?.map((op, idx) => {
+                const live = livePrices[op.pair] || op.current_price;
+                const livePnl = (
+                  (live / op.entry - 1) *
+                  (op.type === "LONG" ? 1 : -1) *
+                  (op.position_value || 200)
+                ).toFixed(2);
+                return (
+                  <tr
+                    key={idx}
+                    style={{ borderBottom: `1px solid ${theme.border}` }}
                   >
-                    Precio Actual
-                  </th>
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Take Profit
-                  </th>
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Stop Loss
-                  </th>
-                  <th
-                    style={{
-                      padding: "12px 10px",
-                      fontWeight: "500",
-                      textAlign: "right",
-                    }}
-                  >
-                    PnL Flotante
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.operaciones_activas &&
-                data.operaciones_activas.length > 0 ? (
-                  data.operaciones_activas.map((op, idx) => (
-                    <tr
-                      key={idx}
-                      style={{ borderBottom: `1px solid ${theme.border}` }}
-                    >
-                      <td style={{ padding: "16px 10px", fontWeight: "bold" }}>
-                        {op.pair}
-                      </td>
-                      <td style={{ padding: "16px 10px" }}>
-                        <span
-                          style={{
-                            padding: "4px 10px",
-                            borderRadius: "6px",
-                            fontSize: "12px",
-                            fontWeight: "bold",
-                            backgroundColor:
-                              op.type === "LONG"
-                                ? theme.successBg
-                                : theme.dangerBg,
-                            color:
-                              op.type === "LONG" ? theme.success : theme.danger,
-                          }}
-                        >
-                          {op.type}
-                        </span>
-                      </td>
-                      <td
+                    <td style={{ padding: "16px 10px", fontWeight: "bold" }}>
+                      {op.pair}
+                    </td>
+                    <td>
+                      <span
                         style={{
-                          padding: "16px 10px",
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        {op.entry}
-                      </td>
-                      <td
-                        style={{
-                          padding: "16px 10px",
-                          fontFamily: "monospace",
+                          padding: "4px 10px",
+                          borderRadius: "6px",
+                          fontSize: "12px",
                           fontWeight: "bold",
-                          color: theme.textMain,
-                        }}
-                      >
-                        {livePrices[op.pair]
-                          ? livePrices[op.pair].toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })
-                          : op.current_price}
-                      </td>
-                      <td
-                        style={{
-                          padding: "16px 10px",
-                          fontFamily: "monospace",
-                          color: theme.success,
-                        }}
-                      >
-                        {op.tp}
-                      </td>
-                      <td
-                        style={{
-                          padding: "16px 10px",
-                          fontFamily: "monospace",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                        }}
-                      >
-                        <span
-                          style={{
-                            color: op.is_trailing ? "#f59e0b" : theme.danger,
-                            fontWeight: op.is_trailing ? "bold" : "normal",
-                          }}
-                        >
-                          {op.sl === 0 ? "SIN SL" : op.sl}
-                        </span>
-                        {op.is_trailing && (
-                          <span
-                            style={{
-                              padding: "2px 6px",
-                              fontSize: "10px",
-                              backgroundColor: "rgba(245, 158, 11, 0.1)",
-                              color: "#f59e0b",
-                              borderRadius: "4px",
-                              border: "1px solid #f59e0b",
-                            }}
-                          >
-                            TRAILING 🔺
-                          </span>
-                        )}
-                      </td>
-                      <td
-                        style={{
-                          padding: "16px 10px",
-                          fontFamily: "monospace",
-                          textAlign: "right",
-                          fontWeight: "bold",
-                          fontSize: "16px",
+                          backgroundColor:
+                            op.type === "LONG"
+                              ? theme.successBg
+                              : theme.dangerBg,
                           color:
-                            op.current_pnl > 0 ? theme.success : theme.danger,
+                            op.type === "LONG" ? theme.success : theme.danger,
                         }}
                       >
-                        {op.current_pnl > 0 ? "+" : ""}
-                        {op.current_pnl}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
+                        {op.type}
+                      </span>
+                    </td>
+                    <td style={{ fontFamily: "monospace" }}>{op.entry}</td>
                     <td
-                      colSpan="7"
                       style={{
-                        padding: "30px 10px",
-                        textAlign: "center",
-                        color: theme.textMuted,
+                        fontFamily: "monospace",
+                        fontWeight: "bold",
+                        color: theme.textMain,
                       }}
                     >
-                      Buscando oportunidades en el mercado...
+                      {live.toLocaleString()}
+                    </td>
+                    <td
+                      style={{ fontFamily: "monospace", color: theme.success }}
+                    >
+                      {op.tp}
+                    </td>
+                    <td style={{ fontFamily: "monospace" }}>
+                      <span
+                        style={{
+                          color: op.is_trailing ? "#f59e0b" : theme.danger,
+                        }}
+                      >
+                        {op.sl === 0 ? "SIN SL" : op.sl}
+                      </span>
+                      {op.is_trailing && (
+                        <span
+                          style={{
+                            marginLeft: "8px",
+                            fontSize: "10px",
+                            color: "#f59e0b",
+                          }}
+                        >
+                          TRAILING 🔺
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      style={{
+                        textAlign: "right",
+                        fontWeight: "bold",
+                        color: livePnl >= 0 ? theme.success : theme.danger,
+                      }}
+                    >
+                      {livePnl > 0 ? "+" : ""}
+                      {livePnl}
                     </td>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
+      </div>
 
-        {/* Trade History */}
+      {/* HISTORIAL */}
+      <div
+        style={{
+          backgroundColor: theme.bgCard,
+          border: `1px solid ${theme.border}`,
+          padding: "25px",
+          borderRadius: "16px",
+        }}
+      >
         <div
           style={{
-            backgroundColor: theme.bgCard,
-            border: `1px solid ${theme.border}`,
-            padding: "25px",
-            borderRadius: "16px",
-            boxShadow: "0 4px 6px rgba(0,0,0,0.1)",
+            display: "flex",
+            justifyContent: "space-between",
+            marginBottom: "20px",
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "20px",
-              flexWrap: "wrap",
-              gap: "15px",
-            }}
-          >
-            <h3 style={{ margin: 0, color: theme.textMain }}>
-              Historial de Transacciones
-            </h3>
-            <div style={{ display: "flex", gap: "10px" }}>
-              <select
-                value={historyFilter}
-                onChange={(e) => setHistoryFilter(e.target.value)}
-                style={{
-                  backgroundColor: theme.bgApp,
-                  color: theme.textMain,
-                  border: `1px solid ${theme.border}`,
-                  padding: "8px 15px",
-                  borderRadius: "6px",
-                  fontSize: "14px",
-                  outline: "none",
-                }}
-              >
-                <option value="ALL">Todos los Pares</option>
-                <option value="BTCUSDT">BTC/USDT</option>
-                <option value="ETHUSDT">ETH/USDT</option>
-                <option value="BNBUSDT">BNB/USDT</option>
-              </select>
-              <select
-                value={historyLimit}
-                onChange={(e) => setHistoryLimit(Number(e.target.value))}
-                style={{
-                  backgroundColor: theme.bgApp,
-                  color: theme.textMain,
-                  border: `1px solid ${theme.border}`,
-                  padding: "8px 15px",
-                  borderRadius: "6px",
-                  fontSize: "14px",
-                  outline: "none",
-                }}
-              >
-                <option value={20}>Últimas 20</option>
-                <option value={50}>Últimas 50</option>
-                <option value={100}>Últimas 100</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ overflowX: "auto" }}>
-            <table
+          <h3 style={{ margin: 0 }}>Historial de Transacciones</h3>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <select
+              value={historyFilter}
+              onChange={(e) => setHistoryFilter(e.target.value)}
               style={{
-                width: "100%",
-                textAlign: "left",
-                borderCollapse: "collapse",
-                fontSize: "14px",
+                backgroundColor: theme.bgApp,
+                color: theme.textMain,
+                border: `1px solid ${theme.border}`,
+                padding: "8px",
+                borderRadius: "6px",
               }}
             >
-              <thead>
-                <tr
-                  style={{
-                    color: theme.textMuted,
-                    borderBottom: `2px solid ${theme.border}`,
-                  }}
-                >
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Fecha y Hora
-                  </th>
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Par
-                  </th>
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Lado
-                  </th>
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Entrada
-                  </th>
-                  <th style={{ padding: "12px 10px", fontWeight: "500" }}>
-                    Salida
-                  </th>
-                  <th
-                    style={{
-                      padding: "12px 10px",
-                      fontWeight: "500",
-                      textAlign: "right",
-                    }}
-                  >
-                    Resultado
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredHistory.length > 0 ? (
-                  filteredHistory.map((op, idx) => (
-                    <tr
-                      key={idx}
-                      style={{ borderBottom: `1px solid ${theme.border}` }}
-                    >
-                      <td
-                        style={{ padding: "14px 10px", color: theme.textMuted }}
-                      >
-                        {op.timestamp}
-                      </td>
-                      <td style={{ padding: "14px 10px", fontWeight: "bold" }}>
-                        {op.pair || "BTCUSDT"}
-                      </td>
-                      <td style={{ padding: "14px 10px" }}>
-                        <span
-                          style={{
-                            color:
-                              op.action === "LONG"
-                                ? theme.success
-                                : theme.danger,
-                            fontWeight: "bold",
-                          }}
-                        >
-                          {op.action}
-                        </span>
-                      </td>
-                      <td
-                        style={{
-                          padding: "14px 10px",
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        {op.entry_price}
-                      </td>
-                      <td
-                        style={{
-                          padding: "14px 10px",
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        {op.close_price}
-                      </td>
-                      <td
-                        style={{
-                          padding: "14px 10px",
-                          fontFamily: "monospace",
-                          textAlign: "right",
-                          fontWeight: "bold",
-                          color:
-                            op.pnl_usdt >= 0 ? theme.success : theme.danger,
-                        }}
-                      >
-                        {op.pnl_usdt >= 0 ? "+" : ""}
-                        {op.pnl_usdt}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td
-                      colSpan="6"
-                      style={{
-                        padding: "30px 10px",
-                        textAlign: "center",
-                        color: theme.textMuted,
-                      }}
-                    >
-                      No hay operaciones registradas.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+              <option value="ALL">Todos los Pares</option>
+              <option value="BTCUSDT">BTC/USDT</option>
+              <option value="ETHUSDT">ETH/USDT</option>
+              <option value="BNBUSDT">BNB/USDT</option>
+            </select>
+            <select
+              value={historyLimit}
+              onChange={(e) => setHistoryLimit(Number(e.target.value))}
+              style={{
+                backgroundColor: theme.bgApp,
+                color: theme.textMain,
+                border: `1px solid ${theme.border}`,
+                padding: "8px",
+                borderRadius: "6px",
+              }}
+            >
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
           </div>
         </div>
+        <table
+          style={{
+            width: "100%",
+            textAlign: "left",
+            borderCollapse: "collapse",
+            fontSize: "14px",
+          }}
+        >
+          <thead>
+            <tr
+              style={{
+                color: theme.textMuted,
+                borderBottom: `2px solid ${theme.border}`,
+              }}
+            >
+              <th style={{ padding: "12px 10px" }}>Fecha</th>
+              <th>Par</th>
+              <th>Lado</th>
+              <th>Entrada</th>
+              <th>Salida</th>
+              <th style={{ textAlign: "right" }}>Resultado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredHistory.map((op, i) => (
+              <tr key={i} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                <td style={{ padding: "14px 10px", color: theme.textMuted }}>
+                  {op.timestamp}
+                </td>
+                <td style={{ fontWeight: "bold" }}>{op.pair}</td>
+                <td
+                  style={{
+                    color: op.action === "LONG" ? theme.success : theme.danger,
+                    fontWeight: "bold",
+                  }}
+                >
+                  {op.action}
+                </td>
+                <td style={{ fontFamily: "monospace" }}>{op.entry_price}</td>
+                <td style={{ fontFamily: "monospace" }}>{op.close_price}</td>
+                <td
+                  style={{
+                    textAlign: "right",
+                    fontWeight: "bold",
+                    color: op.pnl_usdt >= 0 ? theme.success : theme.danger,
+                  }}
+                >
+                  {op.pnl_usdt >= 0 ? "+" : ""}
+                  {op.pnl_usdt}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
 
 // ==========================================
-// COMPONENTE RAÍZ (GESTIÓN DE ESTADO Y RUTAS)
+// APP: GESTIÓN DE RUTAS Y DATOS
 // ==========================================
 export default function App() {
   const [data, setData] = useState(null);
@@ -1110,36 +783,31 @@ export default function App() {
   const [historyLimit, setHistoryLimit] = useState(20);
 
   useEffect(() => {
-    const fetchDashboardData = async () => {
-      try {
-        const response = await fetch("http://127.0.0.1:8000/api/dashboard");
-        const result = await response.json();
-        if (result.error) setError(result.error);
-        else {
-          setData(result);
-          setError(null);
-        }
-      } catch (err) {
-        setError("Desconectado del motor de Mirage.");
-      }
+    const fetchD = () => {
+      fetch(`${API_BASE_URL}/api/dashboard`)
+        .then((res) => res.json())
+        .then((d) => {
+          if (d.error) setError(d.error);
+          else {
+            setData(d);
+            setError(null);
+          }
+        })
+        .catch(() => setError("Desconectado del motor de Mirage."));
     };
-    fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 3000);
-    return () => clearInterval(interval);
+    fetchD();
+    const timer = setInterval(fetchD, 3000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    const wsUrl =
-      "wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/ethusdt@ticker/bnbusdt@ticker";
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(
+      `${API_WS_URL}?streams=btcusdt@ticker/ethusdt@ticker/bnbusdt@ticker`,
+    );
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.data && msg.data.s && msg.data.c) {
-        setLivePrices((prev) => ({
-          ...prev,
-          [msg.data.s]: parseFloat(msg.data.c),
-        }));
-      }
+      if (msg.data?.s)
+        setLivePrices((p) => ({ ...p, [msg.data.s]: parseFloat(msg.data.c) }));
     };
     return () => ws.close();
   }, []);
@@ -1154,7 +822,6 @@ export default function App() {
           justifyContent: "center",
           backgroundColor: theme.bgApp,
           color: theme.danger,
-          fontFamily: "system-ui",
         }}
       >
         <div
@@ -1178,7 +845,7 @@ export default function App() {
         backgroundColor: theme.bgApp,
         color: theme.textMain,
         padding: "30px 20px",
-        fontFamily: '"Inter", system-ui, sans-serif',
+        fontFamily: '"Inter", sans-serif',
       }}
     >
       <Routes>
