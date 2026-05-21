@@ -35,38 +35,46 @@ const theme = {
 };
 
 // ==========================================
-// VISTA 1: PANEL DE CONFIGURACIÓN (EDITABLE STEPPERS)
+// VISTA 1: PANEL DE CONFIGURACIÓN (DINÁMICO)
 // ==========================================
 function SettingsView() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState("general");
+  const [activeTab, setActiveTab] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [config, setConfig] = useState({});
+  const [parametersMetadata, setParametersMetadata] = useState({});
+  const [loading, setLoading] = useState(true);
 
-  const [config, setConfig] = useState({
-    PAPER_BALANCE: 1000.0,
-    RISK_PER_TRADE: 0.02,
-    TIMEFRAME: "1m",
-    LEVERAGE: 10,
-    MIN_CONFIDENCE: 0.65,
-    ATR_MULTIPLIER: 2.0,
-    TP_MULTIPLIER: 4.0,
-    TRAILING_STOP_ACTIVATION: 0.5,
-    TRAILING_STOP_DISTANCE: 0.3,
-    MAX_CONSECUTIVE_LOSSES: 3,
-    RISK_REDUCTION_FACTOR: 0.5,
-    MAX_CONSECUTIVE_WINS: 3,
-    RISK_INCREASE_FACTOR: 1.25,
-    COOLDOWN_CANDLES: 3,
-    SMC_LOOKBACK: 20,
-    SMC_OB_STRENGTH: 0.3,
-    WYCKOFF_LOOKBACK: 50,
-  });
-
+  // Cargar metadata y configuración
   useEffect(() => {
-    fetch(`${API_BASE_URL}/api/config`)
-      .then((res) => res.json())
-      .then((data) => setConfig((prev) => ({ ...prev, ...data })))
-      .catch((err) => console.log("Error cargando config", err));
+    const loadData = async () => {
+      try {
+        const metadataRes = await fetch(`${API_BASE_URL}/api/parameters`);
+        const configRes = await fetch(`${API_BASE_URL}/api/config`);
+
+        if (!metadataRes.ok || !configRes.ok) {
+          throw new Error(`API error: metadata ${metadataRes.status}, config ${configRes.status}`);
+        }
+
+        const metadata = await metadataRes.json();
+        const configData = await configRes.json();
+
+        if (!metadata || Object.keys(metadata).length === 0) {
+          throw new Error("No metadata received from API");
+        }
+
+        setParametersMetadata(metadata);
+        setConfig(configData || {});
+        const firstTab = [...new Set(Object.values(metadata).map(p => p.tab))].sort()[0];
+        setActiveTab(firstTab);
+        setLoading(false);
+      } catch (err) {
+        console.error("Error cargando configuración:", err);
+        setLoading(false);
+      }
+    };
+
+    loadData();
   }, []);
 
   const saveSettings = async () => {
@@ -87,29 +95,27 @@ function SettingsView() {
     }
   };
 
-  const EditableStepper = ({
-    label,
-    objKey,
-    min,
-    max,
-    step,
-    desc,
-    unit = "",
-  }) => {
-    const val = config[objKey];
+  const EditableStepper = ({ param, paramKey }) => {
+    const val = config[paramKey];
 
     const updateVal = (newVal) => {
-      let v = parseFloat(newVal);
-      if (isNaN(v)) return;
-      if (v < min) v = min;
-      if (v > max) v = max;
-      const factor = Math.pow(10, step.toString().split(".")[1]?.length || 0);
-      v = Math.round(v * factor) / factor;
-      setConfig((prev) => ({ ...prev, [objKey]: v }));
+      let v = newVal;
+
+      // Convertir a número si es tipo number
+      if (param.type === 'number') {
+        v = parseFloat(newVal);
+        if (isNaN(v)) return;
+        if (v < param.min) v = param.min;
+        if (v > param.max) v = param.max;
+        const factor = Math.pow(10, (param.step?.toString().split(".")[1]?.length || 0));
+        v = Math.round(v * factor) / factor;
+      }
+
+      setConfig((prev) => ({ ...prev, [paramKey]: v }));
     };
 
-    const increment = () => updateVal(val + parseFloat(step));
-    const decrement = () => updateVal(val - parseFloat(step));
+    const increment = () => updateVal((val || 0) + parseFloat(param.step || 1));
+    const decrement = () => updateVal((val || 0) - parseFloat(param.step || 1));
 
     const btnStyle = {
       width: "44px",
@@ -126,6 +132,63 @@ function SettingsView() {
       transition: "all 0.2s",
     };
 
+    if (param.type === 'select') {
+      return (
+        <div
+          style={{
+            backgroundColor: theme.bgInput,
+            padding: "20px",
+            borderRadius: "12px",
+            border: `1px solid ${theme.border}`,
+            display: "flex",
+            flexDirection: "column",
+            gap: "12px",
+          }}
+        >
+          <div>
+            <label style={{
+              color: theme.textMain,
+              fontWeight: "600",
+              fontSize: "14px",
+              display: "block",
+              marginBottom: "8px",
+            }}>
+              {param.label}
+            </label>
+            <span style={{
+              color: theme.textMuted,
+              fontSize: "12px",
+              lineHeight: "1.4",
+              display: "block",
+            }}>
+              {param.description}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            {param.options.map((opt) => (
+              <button
+                key={opt}
+                onClick={() => setConfig({ ...config, [paramKey]: opt })}
+                style={{
+                  padding: "10px 16px",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontWeight: "600",
+                  transition: "all 0.2s",
+                  backgroundColor: config[paramKey] === opt ? theme.accent : "transparent",
+                  color: config[paramKey] === opt ? "#fff" : theme.textMuted,
+                  boxShadow: config[paramKey] === opt ? "0 2px 8px rgba(59, 130, 246, 0.4)" : "none",
+                }}
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div
         style={{
@@ -136,74 +199,42 @@ function SettingsView() {
           display: "flex",
           flexDirection: "column",
           gap: "12px",
-          transition: "all 0.3s",
         }}
-        onMouseOver={(e) =>
-          (e.currentTarget.style.borderColor = theme.borderHover)
-        }
-        onMouseOut={(e) => (e.currentTarget.style.borderColor = theme.border)}
       >
         <div>
-          <label
-            style={{
-              color: theme.textMain,
-              fontWeight: "600",
-              fontSize: "14px",
-              display: "block",
-              marginBottom: "4px",
-            }}
-          >
-            {label}
+          <label style={{
+            color: theme.textMain,
+            fontWeight: "600",
+            fontSize: "14px",
+            display: "block",
+            marginBottom: "4px",
+          }}>
+            {param.label}
           </label>
-          {desc && (
-            <span
-              style={{
-                color: theme.textMuted,
-                fontSize: "12px",
-                lineHeight: "1.4",
-                display: "block",
-              }}
-            >
-              {desc}
-            </span>
-          )}
+          <span style={{
+            color: theme.textMuted,
+            fontSize: "12px",
+            lineHeight: "1.4",
+            display: "block",
+          }}>
+            {param.description}
+          </span>
         </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            marginTop: "4px",
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <button
             onClick={decrement}
             style={btnStyle}
-            onMouseOver={(e) =>
-              (e.currentTarget.style.backgroundColor = theme.border)
-            }
-            onMouseOut={(e) =>
-              (e.currentTarget.style.backgroundColor = theme.bgCard)
-            }
+            onMouseOver={(e) => (e.currentTarget.style.backgroundColor = theme.border)}
+            onMouseOut={(e) => (e.currentTarget.style.backgroundColor = theme.bgCard)}
           >
             -
           </button>
-
-          <div
-            style={{
-              flex: 1,
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-            }}
-          >
+          <div style={{ flex: 1, position: "relative", display: "flex", alignItems: "center" }}>
             <input
               type="number"
-              step={step}
-              value={val}
-              onChange={(e) =>
-                setConfig({ ...config, [objKey]: e.target.value })
-              }
+              step={param.step}
+              value={val ?? ''}
+              onChange={(e) => updateVal(e.target.value)}
               style={{
                 width: "100%",
                 height: "44px",
@@ -215,8 +246,7 @@ function SettingsView() {
                 fontSize: "18px",
                 textAlign: "center",
                 outline: "none",
-                paddingRight: unit ? "36px" : "10px",
-                transition: "border-color 0.2s",
+                paddingRight: param.unit ? "36px" : "10px",
               }}
               onFocus={(e) => (e.target.style.borderColor = theme.accent)}
               onBlur={(e) => {
@@ -224,31 +254,24 @@ function SettingsView() {
                 updateVal(e.target.value);
               }}
             />
-            {unit && (
-              <span
-                style={{
-                  position: "absolute",
-                  right: "12px",
-                  color: theme.textMuted,
-                  fontSize: "13px",
-                  fontWeight: "600",
-                  pointerEvents: "none",
-                }}
-              >
-                {unit}
+            {param.unit && (
+              <span style={{
+                position: "absolute",
+                right: "12px",
+                color: theme.textMuted,
+                fontSize: "13px",
+                fontWeight: "600",
+                pointerEvents: "none",
+              }}>
+                {param.unit}
               </span>
             )}
           </div>
-
           <button
             onClick={increment}
             style={btnStyle}
-            onMouseOver={(e) =>
-              (e.currentTarget.style.backgroundColor = theme.border)
-            }
-            onMouseOut={(e) =>
-              (e.currentTarget.style.backgroundColor = theme.bgCard)
-            }
+            onMouseOver={(e) => (e.currentTarget.style.backgroundColor = theme.border)}
+            onMouseOut={(e) => (e.currentTarget.style.backgroundColor = theme.bgCard)}
           >
             +
           </button>
@@ -257,30 +280,71 @@ function SettingsView() {
     );
   };
 
-  const tabs = [
-    { id: "general", label: "Cuenta y General", icon: "🏦" },
-    { id: "risk", label: "Gestión de Riesgo", icon: "🛡️" },
-    { id: "execution", label: "Ejecución (SL/TP)", icon: "⚡" },
-    { id: "strategy", label: "Motor IA & Estrategia", icon: "🧠" },
-  ];
+  if (loading) {
+    return (
+      <div style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: theme.bgApp,
+        color: theme.accent,
+      }}>
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "15px",
+        }}>
+          <div style={{
+            width: "40px",
+            height: "40px",
+            border: "4px solid rgba(59, 130, 246, 0.3)",
+            borderTopColor: theme.accent,
+            borderRadius: "50%",
+            animation: "spin 1s linear infinite",
+          }} />
+          <p style={{ color: theme.textMuted }}>Cargando ajustes...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const tabs = [...new Set(Object.values(parametersMetadata).map(p => p.tab))]
+    .sort()
+    .map(tabId => ({
+      id: tabId,
+      label: {
+        general: "Cuenta y General",
+        market: "Mercado",
+        risk: "Gestión de Riesgo",
+        execution: "Ejecución (SL/TP)",
+        strategy: "Motor IA & Estrategia",
+        scheduling: "Horarios"
+      }[tabId] || tabId,
+      icon: {
+        general: "🏦",
+        market: "📊",
+        risk: "🛡️",
+        execution: "⚡",
+        strategy: "🧠",
+        scheduling: "⏰"
+      }[tabId] || "⚙️"
+    }));
 
   return (
-    <div
-      style={{
-        maxWidth: "1100px",
-        margin: "40px auto",
-        padding: "0 20px",
-        animation: "fadeIn 0.4s ease-out",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "30px",
-        }}
-      >
+    <div style={{
+      maxWidth: "1100px",
+      margin: "40px auto",
+      padding: "0 20px",
+      animation: "fadeIn 0.4s ease-out",
+    }}>
+      <div style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: "30px",
+      }}>
         <div>
           <button
             onClick={() => navigate("/")}
@@ -320,30 +384,20 @@ function SettingsView() {
             gap: "8px",
             alignItems: "center",
             transition: "all 0.2s",
-            boxShadow: isSaving ? "none" : "0 4px 12px rgba(59, 130, 246, 0.4)",
           }}
         >
           {isSaving ? "Aplicando Cambios..." : "💾 Guardar y Aplicar"}
         </button>
       </div>
 
-      <div
-        style={{
+      <div style={{ display: "flex", gap: "24px", alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{
+          flex: "1",
+          minWidth: "220px",
           display: "flex",
-          gap: "24px",
-          alignItems: "flex-start",
-          flexWrap: "wrap",
-        }}
-      >
-        <div
-          style={{
-            flex: "1",
-            minWidth: "220px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "8px",
-          }}
-        >
+          flexDirection: "column",
+          gap: "8px",
+        }}>
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -353,8 +407,7 @@ function SettingsView() {
                 borderRadius: "12px",
                 border: "none",
                 textAlign: "left",
-                backgroundColor:
-                  activeTab === tab.id ? theme.bgCard : "transparent",
+                backgroundColor: activeTab === tab.id ? theme.bgCard : "transparent",
                 color: activeTab === tab.id ? theme.textMain : theme.textMuted,
                 fontWeight: activeTab === tab.id ? "700" : "500",
                 cursor: "pointer",
@@ -362,12 +415,7 @@ function SettingsView() {
                 alignItems: "center",
                 gap: "12px",
                 transition: "all 0.2s",
-                boxShadow:
-                  activeTab === tab.id ? "0 4px 6px rgba(0,0,0,0.1)" : "none",
-                borderLeft:
-                  activeTab === tab.id
-                    ? `4px solid ${theme.accent}`
-                    : "4px solid transparent",
+                borderLeft: activeTab === tab.id ? `4px solid ${theme.accent}` : "4px solid transparent",
               }}
             >
               <span style={{ fontSize: "20px" }}>{tab.icon}</span> {tab.label}
@@ -375,281 +423,25 @@ function SettingsView() {
           ))}
         </div>
 
-        <div
-          style={{
-            flex: "3",
-            minWidth: "300px",
-            backgroundColor: theme.bgCard,
-            padding: "32px",
-            borderRadius: "16px",
-            border: `1px solid ${theme.border}`,
-            boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
-          }}
-        >
-          {activeTab === "general" && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                gap: "24px",
-              }}
-            >
-              <EditableStepper
-                label="Balance Simulado"
-                objKey="PAPER_BALANCE"
-                step="100"
-                min={10}
-                max={1000000}
-                desc="Capital virtual para el entorno Paper Trading."
-                unit="USDT"
-              />
-              <EditableStepper
-                label="Apalancamiento"
-                objKey="LEVERAGE"
-                step="1"
-                min={1}
-                max={125}
-                desc="Multiplicador de margen para Binance Futures."
-                unit="x"
-              />
-              <div
-                style={{
-                  backgroundColor: theme.bgInput,
-                  padding: "20px",
-                  borderRadius: "12px",
-                  border: `1px solid ${theme.border}`,
-                  gridColumn: "1 / -1",
-                }}
-              >
-                <label
-                  style={{
-                    color: theme.textMain,
-                    fontWeight: "600",
-                    fontSize: "14px",
-                    display: "block",
-                    marginBottom: "4px",
-                  }}
-                >
-                  Temporalidad Analítica (Timeframe)
-                </label>
-                <span
-                  style={{
-                    color: theme.textMuted,
-                    fontSize: "12px",
-                    lineHeight: "1.4",
-                    display: "block",
-                    marginBottom: "16px",
-                  }}
-                >
-                  Frecuencia de lectura de velas para el motor de Inteligencia
-                  Artificial.
-                </span>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "8px",
-                    backgroundColor: theme.bgCard,
-                    padding: "6px",
-                    borderRadius: "10px",
-                    border: `1px solid ${theme.border}`,
-                  }}
-                >
-                  {[
-                    { val: "1m", label: "1m (Scalping)" },
-                    { val: "5m", label: "5m (Rápido)" },
-                    { val: "15m", label: "15m (Intradía)" },
-                    { val: "1h", label: "1h (Swing)" },
-                  ].map((tf) => (
-                    <button
-                      key={tf.val}
-                      onClick={() =>
-                        setConfig({ ...config, TIMEFRAME: tf.val })
-                      }
-                      style={{
-                        flex: 1,
-                        padding: "10px",
-                        border: "none",
-                        borderRadius: "6px",
-                        cursor: "pointer",
-                        fontWeight: "600",
-                        transition: "all 0.2s",
-                        backgroundColor:
-                          config.TIMEFRAME === tf.val
-                            ? theme.accent
-                            : "transparent",
-                        color:
-                          config.TIMEFRAME === tf.val
-                            ? "#fff"
-                            : theme.textMuted,
-                        boxShadow:
-                          config.TIMEFRAME === tf.val
-                            ? "0 2px 8px rgba(59, 130, 246, 0.4)"
-                            : "none",
-                      }}
-                    >
-                      {tf.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-          {activeTab === "risk" && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                gap: "24px",
-              }}
-            >
-              <EditableStepper
-                label="Riesgo por Operación"
-                objKey="RISK_PER_TRADE"
-                step="0.01"
-                min={0.01}
-                max={0.2}
-                desc="Porcentaje de capital en riesgo por trade."
-                unit="%"
-              />
-              <EditableStepper
-                label="Velas de Enfriamiento"
-                objKey="COOLDOWN_CANDLES"
-                step="1"
-                min={0}
-                max={50}
-                desc="Pausa obligatoria tras cerrar una operación."
-                unit="velas"
-              />
-              <EditableStepper
-                label="Reducción de Riesgo"
-                objKey="RISK_REDUCTION_FACTOR"
-                step="0.1"
-                min={0.1}
-                max={1.0}
-                desc="Multiplicador de pérdida (0.5 = reduce a la mitad)."
-                unit="x"
-              />
-              <EditableStepper
-                label="Máx. Pérdidas Continuas"
-                objKey="MAX_CONSECUTIVE_LOSSES"
-                step="1"
-                min={1}
-                max={20}
-                desc="Fallos antes de activar reducción de riesgo."
-                unit="ops"
-              />
-              <EditableStepper
-                label="Aumento de Riesgo"
-                objKey="RISK_INCREASE_FACTOR"
-                step="0.1"
-                min={1.0}
-                max={3.0}
-                desc="Escala el lote durante una racha ganadora."
-                unit="x"
-              />
-              <EditableStepper
-                label="Máx. Victorias Continuas"
-                objKey="MAX_CONSECUTIVE_WINS"
-                step="1"
-                min={1}
-                max={20}
-                desc="Aciertos antes de resetear el riesgo escalado."
-                unit="ops"
-              />
-            </div>
-          )}
-          {activeTab === "execution" && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                gap: "24px",
-              }}
-            >
-              <EditableStepper
-                label="Multiplicador ATR (Stop Loss)"
-                objKey="ATR_MULTIPLIER"
-                step="0.1"
-                min={0.5}
-                max={10.0}
-                desc="Holgura del SL basada en la volatilidad dinámica."
-                unit="ATR"
-              />
-              <EditableStepper
-                label="Ratio Riesgo/Beneficio (TP)"
-                objKey="TP_MULTIPLIER"
-                step="0.5"
-                min={1.0}
-                max={20.0}
-                desc="Distancia del Take Profit respecto al Stop Loss."
-                unit="R"
-              />
-              <EditableStepper
-                label="Activación Trailing Stop"
-                objKey="TRAILING_STOP_ACTIVATION"
-                step="0.1"
-                min={0.1}
-                max={10.0}
-                desc="Ganancia % necesaria para asegurar Breakeven."
-                unit="%"
-              />
-              <EditableStepper
-                label="Distancia Trailing Stop"
-                objKey="TRAILING_STOP_DISTANCE"
-                step="0.1"
-                min={0.1}
-                max={5.0}
-                desc="Distancia % que el SL persigue al precio vivo."
-                unit="%"
-              />
-            </div>
-          )}
-          {activeTab === "strategy" && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                gap: "24px",
-              }}
-            >
-              <EditableStepper
-                label="Confianza Mínima Modelo IA"
-                objKey="MIN_CONFIDENCE"
-                step="0.05"
-                min={0.5}
-                max={0.99}
-                desc="Probabilidad requerida por Random Forest para operar."
-                unit="%"
-              />
-              <EditableStepper
-                label="Fuerza Order Blocks (SMC)"
-                objKey="SMC_OB_STRENGTH"
-                step="0.1"
-                min={0.1}
-                max={2.0}
-                desc="Intensidad requerida para validar liquidez."
-                unit="lvl"
-              />
-              <EditableStepper
-                label="Periodo Retrospectivo SMC"
-                objKey="SMC_LOOKBACK"
-                step="5"
-                min={10}
-                max={200}
-                desc="Velas escaneadas para cambios de estructura (ChoCh)."
-                unit="velas"
-              />
-              <EditableStepper
-                label="Periodo Retrospectivo Wyckoff"
-                objKey="WYCKOFF_LOOKBACK"
-                step="10"
-                min={20}
-                max={500}
-                desc="Ventana para detectar Acumulación/Distribución."
-                unit="velas"
-              />
-            </div>
-          )}
+        <div style={{
+          flex: "3",
+          minWidth: "300px",
+          backgroundColor: theme.bgCard,
+          padding: "32px",
+          borderRadius: "16px",
+          border: `1px solid ${theme.border}`,
+        }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: "24px",
+          }}>
+            {Object.entries(parametersMetadata)
+              .filter(([_, param]) => param.tab === activeTab)
+              .map(([key, param]) => (
+                <EditableStepper key={key} param={param} paramKey={key} />
+              ))}
+          </div>
         </div>
       </div>
     </div>

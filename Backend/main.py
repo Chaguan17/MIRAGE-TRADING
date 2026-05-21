@@ -95,7 +95,7 @@ def main():
     sleep_start = dtime(config.SLEEP_START_HOUR, config.SLEEP_START_MINUTE)
     sleep_end = dtime(config.SLEEP_END_HOUR, config.SLEEP_END_MINUTE)
     
-    files_to_watch = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py']
+    files_to_watch = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py', 'storage/settings.json']
     last_mod_times = {f: os.path.getmtime(f) for f in files_to_watch if os.path.exists(f)}
     already_slept = False
 
@@ -123,6 +123,7 @@ def main():
             importlib.reload(config)
             importlib.reload(tracker)
             importlib.reload(data_engine)
+            logger.info("⚙️ Configuración actualizada desde el Dashboard")
             
             for sym in PARES_ACTIVOS:
                 memoria = bots[sym]['tr'].active_trades
