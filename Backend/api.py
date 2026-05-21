@@ -74,6 +74,19 @@ def get_dashboard_data():
         return {"error": str(e)}
     
 
+@app.get("/api/parameters")
+def get_parameters_metadata():
+    """Devuelve estructura y validaciones de parámetros editables"""
+    try:
+        with open("storage/parameters_metadata.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.error("parameters_metadata.json not found")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in parameters_metadata.json: {e}")
+        return {}
+
 @app.get("/api/config")
 def get_config():
     try:

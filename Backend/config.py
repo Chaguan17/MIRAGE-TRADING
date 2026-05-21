@@ -21,10 +21,10 @@ SETTINGS_PATH = "storage/settings.json"
 # ══════════════════════════════════════════════════════════════════
 
 # ── LÍMITES DE SEGURIDAD (HARD LIMITS — NO CAMBIAR) ──────────────
-MAX_LEVERAGE_ALLOWED = 3          # Nunca por encima de 3x
-DEFAULT_LEVERAGE     = 2          # Valor seguro por defecto
-MIN_TRADES_FOR_AI    = 20         # Antes era 5 — sube a 20 ahora, llega a 100 en Sprint 3
-MAX_BOOTSTRAP_BUFFER = 2          # Mínimo de trades para primer fit online
+MAX_LEVERAGE_ALLOWED = 125         # Máximo permitido 125x
+DEFAULT_LEVERAGE     = 10         # Valor por defecto 10x
+MIN_TRADES_FOR_AI    = 100         # Antes era 5 — sube a 20 ahora, llega a 100 en Sprint 3
+MAX_BOOTSTRAP_BUFFER = 5          # Mínimo de trades para primer fit online
 
 
 def load_dynamic_settings():
@@ -197,7 +197,8 @@ DAILY_SUMMARY_MINUTE = int(dyn.get('DAILY_SUMMARY_MINUTE', 10))
 # ── CICLO CIRCADIANO ──────────────────────────────────────────────
 SLEEP_START_HOUR   = int(dyn.get('SLEEP_START_HOUR', 22))
 SLEEP_START_MINUTE = int(dyn.get('SLEEP_START_MINUTE', 0))
-SLEEP_END_HOUR     = int(dyn.get('SLEEP_END_HOUR', 22))
-SLEEP_END_MINUTE   = int(dyn.get('SLEEP_END_MINUTE', 5))
+SLEEP_END_HOUR     = int(dyn.get('SLEEP_END_HOUR', 8))
+SLEEP_END_MINUTE   = int(dyn.get('SLEEP_END_MINUTE', 0))
 
 validate_sleep_config(SLEEP_START_HOUR, SLEEP_START_MINUTE, SLEEP_END_HOUR, SLEEP_END_MINUTE)
+logger.info(f"Sleep schedule configured: {SLEEP_START_HOUR:02d}:{SLEEP_START_MINUTE:02d} → {SLEEP_END_HOUR:02d}:{SLEEP_END_MINUTE:02d} UTC")
