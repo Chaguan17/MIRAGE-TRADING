@@ -1,8 +1,10 @@
 import os
+import sqlite3
 import pandas as pd
 import logging
 from datetime import datetime
 from threading import Lock
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +31,9 @@ class TradeTracker:
         'price_slope', 'range_pct', 'near_struct_high', 'near_struct_low',
     ]
 
-    def __init__(self, symbol="BTCUSDT", filepath='storage/trade_history.csv'):
+    def __init__(self, symbol="BTCUSDT"):
         self.symbol        = symbol
-        self.filepath      = filepath
+        self.db_path       = config.DB_PATH
         self.active_trades = []
         self._trades_lock  = Lock()  # Thread-safe access to active_trades
         self._on_close_cb  = None
@@ -49,39 +51,31 @@ class TradeTracker:
         self._on_close_cb = fn
 
     def _ensure_storage(self):
-        if not os.path.exists('storage'):
-            os.makedirs('storage')
-        if not os.path.exists(self.filepath):
-            pd.DataFrame(columns=self.COLUMNAS).to_csv(self.filepath, index=False)
-        else:
-            df_check = pd.read_csv(self.filepath, nrows=0)
-            existing = list(df_check.columns)
-            new_cols = [c for c in self.COLUMNAS if c not in existing]
-            if new_cols:
-                print(f"⚠️ Migrando CSV — añadiendo columnas: {new_cols}")
-                df_old = pd.read_csv(self.filepath)
-                for c in new_cols:
-                    if c == 'pair': df_old[c] = 'UNKNOWN'
-                    else: df_old[c] = 0
-                df_old[self.COLUMNAS].to_csv(self.filepath, index=False)
+        """Crea la tabla de trades en SQLite si no existe."""
+        os.makedirs('storage', exist_ok=True)
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        columns_sql = []
+        for col in self.COLUMNAS:
+            col_type = "REAL" if col in ['size', 'entry_price', 'close_price', 'pnl_usdt'] or col in self.FEATURE_COLS else "TEXT"
+            columns_sql.append(f"{col} {col_type}")
+        query = f"CREATE TABLE IF NOT EXISTS trades ({', '.join(columns_sql)})"
+        cursor.execute(query)
+        conn.commit()
+        conn.close()
 
     def _load_historical_stats(self):
         try:
-            df = pd.read_csv(self.filepath)
-            if 'pair' in df.columns:
-                df = df[df['pair'] == self.symbol]
-
-            if not df.empty:
-                self.total_trades = len(df)
-                self.wins         = len(df[df['result'] == 'WIN'])
-                self.losses       = len(df[df['result'] == 'LOSS'])
-                self.total_pnl    = df['pnl_usdt'].sum()
-                self.win_rate     = (self.wins / self.total_trades) * 100 if self.total_trades > 0 else 0
+            conn = sqlite3.connect(self.db_path)
+            query = "SELECT COUNT(*), SUM(pnl_usdt), SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) FROM trades WHERE pair = ?"
+            res = conn.execute(query, (self.symbol,)).fetchone()
+            if res and res[0] > 0:
+                self.total_trades = res[0]
+                self.total_pnl    = res[1] or 0.0
+                self.wins         = res[2] or 0
+                self.win_rate     = (self.wins / self.total_trades) * 100
                 logger.info(f"Loaded {self.total_trades} historical trades for {self.symbol}")
-        except FileNotFoundError:
-            logger.info(f"No trade history found for {self.symbol}")
-        except pd.errors.EmptyDataError:
-            logger.info(f"Trade history CSV is empty for {self.symbol}")
+            conn.close()
         except Exception as e:
             logger.error(f"Error loading historical stats for {self.symbol}: {e}")
 
@@ -126,14 +120,17 @@ class TradeTracker:
                     if trade['action'] == 'LONG'
                     else (trade['entry_price'] - close_price) * trade['size']
                 )
-                self._save_to_csv(trade, close_price, result, pnl, sl_was_hit)
+                self._save_to_db(trade, close_price, result, pnl, sl_was_hit)
                 self._update_live_stats(result, pnl)
 
                 if self._on_close_cb:
+                    margin_to_release = (trade['size'] * trade['entry_price']) / config.LEVERAGE
                     self._on_close_cb(
                         trade['_features'], result,
                         sl_was_used=trade['use_sl'],
                         sl_was_hit=sl_was_hit,
+                        pnl=pnl,
+                        margin_released=margin_to_release
                     )
 
                 with self._trades_lock:
@@ -142,7 +139,7 @@ class TradeTracker:
                 sl_info = "(SL tocado)" if sl_was_hit else "(TP alcanzado)"
                 print(f"{emoji} {self.symbol} Trade cerrado: {result} {sl_info} | PnL: {pnl:+.4f} USDT")
 
-    def _save_to_csv(self, trade, close_price, result, pnl, sl_was_hit):
+    def _save_to_db(self, trade, close_price, result, pnl, sl_was_hit):
         row = {
             'timestamp':   trade['timestamp'],
             'pair':        self.symbol,
@@ -156,12 +153,17 @@ class TradeTracker:
             'sl_was_hit':  int(sl_was_hit) if sl_was_hit is not None else 0,
             **{col: trade.get(col, 0) for col in self.FEATURE_COLS},
         }
+        
+        conn = sqlite3.connect(self.db_path)
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(["?"] * len(row))
+        query = f"INSERT INTO trades ({cols}) VALUES ({placeholders})"
+        
         try:
-            pd.DataFrame([row]).to_csv(self.filepath, mode='a', header=False, index=False)
-        except IOError as e:
-            logger.error(f"Failed to save trade to CSV for {self.symbol}: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error saving trade to CSV for {self.symbol}: {e}")
+            conn.execute(query, list(row.values()))
+            conn.commit()
+        finally:
+            conn.close()
 
     def _update_live_stats(self, result, pnl):
         self.total_trades += 1

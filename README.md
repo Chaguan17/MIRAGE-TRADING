@@ -7,9 +7,10 @@
 - **9 estrategias técnicas** diferentes integradas
 - **Paper Trading** para simulación segura
 - **Dashboard en tiempo real** para monitoreo
+- **Base de Datos SQLite** para persistencia e integridad
 - Arquitectura modular Python + React
 
-**Estado:** Sprint 2 en progreso (Gestión de riesgo y retroalimentación)
+**Estado:** Sprint 3 (Optimización de Inteligencia y Gestión de Riesgo Avanzada)
 
 ---
 
@@ -43,15 +44,16 @@ chaguan17-mirage-trading/
 ### 1. **api.py** - Servidor FastAPI
 **Responsabilidades:**
 - Endpoint `/api/dashboard` → Datos para el dashboard (PnL, operaciones, métricas)
+- Endpoint `/api/performance` → Histórico completo desde SQLite
 - Endpoint `/api/config` → Lectura/escritura de configuración
 - Middleware CORS configurado
-- Gestión de storage (JSON + CSV)
+- Gestión de storage (JSON + SQLite)
 
 **Flujo de datos:**
-1. Lee `live_state.json` (estado del bot)
-2. Lee `trade_history.csv` (historial de operaciones)
-3. Calcula métricas acumulativas
-4. Devuelve al frontend
+1. Consulta `mirage_trading.db` para obtener el historial.
+2. Procesa `live_state.json` para el estado actual.
+3. Filtra registros inválidos (UNKNOWN).
+4. Sincroniza con el frontend mediante polling y WebSockets.
 
 **Configuración por defecto:**
 ```json
@@ -109,7 +111,8 @@ Extrae features técnicos de los precios:
 - **Position Sizing dinámico** basado en % de capital
 - **Stop Loss** automático
 - **Take Profit** múltiple
-- **Scale-In** (promediado) para mejorar breakeven
+- **Scale-In (DCA)**: Hasta 3 balas para mejorar el precio promedio.
+- **Martingala**: Multiplicador de riesgo tras pérdidas con límite de pasos.
 
 ### 6. **executor.py** - Ejecutor de Órdenes
 - Abre/cierra posiciones
@@ -123,7 +126,6 @@ Registra en CSV:
 - Etiquetas para reentrenamiento de IA
 
 ### 8. **config.py** - Configuración
-Carga variables de entorno (`.env`):
 - API keys de Binance
 - Parámetros del bot
 
@@ -136,13 +138,14 @@ Carga variables de entorno (`.env`):
 **Dashboard Component**
 - **Cards de KPIs:** PnL total, Win Rate, Operaciones activas
 - **Gráfica de PnL acumulado** (últimas 30 operaciones)
-- **Tabla de historial** de operaciones
-- **Precios en vivo** de BTC, ETH, BNB (WebSocket)
+- **Performance Pro**: Vista dedicada con Sharpe Ratio, Max Drawdown y Profit Factor.
+- **Precios en vivo**: Streams dinámicos basados en la flota activa.
 
 **SettingsView Component**
 - Panel para modificar configuración
 - Dropdown para seleccionar estrategia
-- Sliders para ajustar parámetros
+- **Entrada Natural**: Gestión de porcentajes (2% vs 0.02) simplificada.
+- **Categorización**: General, Mercado, Riesgo, Ejecución e IA.
 
 **Tema personalizado:**
 - Colores acorde al modo claro/oscuro
@@ -153,18 +156,21 @@ Carga variables de entorno (`.env`):
 
 ## 🚀 Estado del Desarrollo
 
-### ✅ SPRINT 1: COMPLETADO
+### ✅ SPRINT 1 & 2: COMPLETADO
 - [x] Conexión blindada a Binance API
 - [x] Paper Trading (simulación)
 - [x] Data Engine (features)
 - [x] Brain base (Random Forest)
-
-### 🔄 SPRINT 2: EN PROCESO
 - [x] Risk Manager (Position Sizing)
 - [x] Scale-In logic
 - [x] Hot-Reloading (cargar código sin reiniciar)
-- [x] Trade Tracker + Dashboard
-- ⏳ Próximas: Optimización, backtesting
+- [x] Migración a SQLite
+
+### 🔄 SPRINT 3: EN PROCESO
+- [x] Performance Dashboard (Métricas Pro)
+- [x] Martingala integrada
+- [x] Sistema de Vetos de IA (RSI, Tendencia BTC, Probabilidad)
+- ⏳ Próximas: Backtesting, Optimización de pesos de IA.
 
 ---
 
@@ -244,15 +250,11 @@ MIN_CONFIDENCE: 75% (más selectivo)
    - 10x en producción es muy alto
    - Risk: Liquidación rápida
 
-### Técnicas:
-5. **API Key en .env (buena práctica)**
-   - Pero sin rotación de keys
-   
-6. **Sincronización de reloj manual**
-   - CCXT puede manejarlo automáticamente
+5. **Backtesting**
+   - Pendiente integrar validación histórica.
 
-7. **CSV sin base de datos**
-   - Performance puede degradarse con 10k+ operaciones
+6. **Consistencia IA**
+   - El reentrenamiento nocturno requiere volumen de datos (> 100 trades).
 
 ---
 
@@ -303,10 +305,10 @@ MIN_CONFIDENCE: 75% (más selectivo)
 **Dashboard debería mostrar:**
 - ✅ PnL Total
 - ✅ Win Rate
-- ⚠️ Sharpe Ratio (FALTA)
-- ⚠️ Máximo Drawdown (FALTA)
-- ⚠️ Factor de Ganancia (Profit Factor) (FALTA)
-- ⚠️ Promedio de ganancia vs pérdida (FALTA)
+- ✅ Sharpe Ratio
+- ✅ Máximo Drawdown
+- ✅ Factor de Ganancia (Profit Factor)
+- ✅ Rendimiento Temporal (Diario/Mensual)
 
 ---
 

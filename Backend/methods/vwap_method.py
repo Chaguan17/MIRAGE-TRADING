@@ -44,10 +44,22 @@ def analyze(features):
     if crossed_down and last_vol_ratio > 1.2:
         return 0, 0.82
 
-    if above_vwap and last_price <= last_lower * 1.001:
+    # BUG CRÍTICO CORREGIDO #3:
+    # Las condiciones originales eran imposibles de cumplir:
+    #   - "above_vwap AND precio <= banda_inferior" es contradictorio porque
+    #     la banda inferior siempre está POR DEBAJO del vwap.
+    #   - "below_vwap AND precio >= banda_superior" es igualmente imposible.
+    # Estas dos ramas NUNCA emitían señal.
+    #
+    # Lógica correcta:
+    #   - Si el precio está BAJO el vwap y toca/cruza la banda inferior → señal de compra
+    #     (rebote desde zona de soporte)
+    #   - Si el precio está SOBRE el vwap y toca/cruza la banda superior → señal de venta
+    #     (rechazo en zona de resistencia)
+    if below_vwap and last_price <= last_lower * 1.001:
         return 1, 0.72 if last_vol_ratio > 1.0 else 0.62
 
-    if below_vwap and last_price >= last_upper * 0.999:
+    if above_vwap and last_price >= last_upper * 0.999:
         return 0, 0.72 if last_vol_ratio > 1.0 else 0.62
 
     return None, 0

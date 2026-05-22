@@ -1,30 +1,25 @@
 import time
 import os
+import shutil
 import json
 import importlib
 import logging
 import config
+import brain
 from binance_api import MirageBinance
-from data_engine import DataEngine
-from brain import MirageBrain
+import data_engine
 import risk_manager
 import tracker
-import data_engine
 from datetime import datetime, time as dtime
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ==========================================
-# ⚙️ CONFIGURACIÓN MULTI-PAIR
-# ==========================================
-PARES_ACTIVOS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
-
+FILES_TO_WATCH = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py', 'storage/settings.json']
 
 def check_for_updates(last_mod_times):
-    files = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py']
     updated = False
-    for f in files:
+    for f in FILES_TO_WATCH:
         try:
             if os.path.exists(f):
                 t = os.path.getmtime(f)
@@ -54,6 +49,21 @@ def connect_with_retry(api):
     print("❌ No se pudo reconectar. Bot detenido.")
     return False
 
+def make_callback(symbol, bots, api):
+    """
+    Genera el callback de cierre de trade para un símbolo.
+    Se extrae a función de nivel de módulo para evitar problemas de scope
+    en el hot-reload (el original estaba definido dentro del bucle for).
+    """
+    def on_trade_closed(features_dict, result_label, sl_was_used, sl_was_hit, pnl, margin_released):
+        # Sinergia: Actualizamos el balance real/simulado de la API
+        api.release_margin(margin_released)
+        api.update_paper_equity(pnl)
+        
+        bots[symbol]['rm'].register_result(result_label)
+        bots[symbol]['brain'].online_update(features_dict, result_label, sl_was_used, sl_was_hit)
+    return on_trade_closed
+
 def main():
     print("🤖 MIRAGE TRADING — Arquitectura de Flota MULTI-PAIR")
 
@@ -64,50 +74,47 @@ def main():
     account_balance = api.get_balance()
     os.makedirs("storage", exist_ok=True)
 
-    # 1. INICIALIZAR EL EJÉRCITO DE BOTS (Un cerebro por moneda)
+    pares_activos = config.PARES_ACTIVOS
+
     bots = {}
-    for sym in PARES_ACTIVOS:
+    for sym in pares_activos:
         print(f"⚙️ Construyendo motor para {sym}...")
         bots[sym] = {
-            'engine': DataEngine(),
-            'brain': MirageBrain(symbol=sym), # Pasa el símbolo
+            'engine': data_engine.DataEngine(),
+            'brain': brain.MirageBrain(symbol=sym),
             'rm': risk_manager.RiskManager(),
-            'tr': tracker.TradeTracker(symbol=sym), # Pasa el símbolo
+            'tr': tracker.TradeTracker(symbol=sym),
             'cooldown_left': 0,
             'consecutive_errors': 0
         }
 
-        # Conectar el callback del tracker a SU propio cerebro
-        def make_callback(symbol):
-            def on_trade_closed(features_dict, result_label, sl_was_used, sl_was_hit):
-                bots[symbol]['rm'].register_result(result_label)
-                bots[symbol]['brain'].online_update(features_dict, result_label, sl_was_used, sl_was_hit)
-            return on_trade_closed
-            
-        bots[sym]['tr'].set_on_close_callback(make_callback(sym))
+        cb = make_callback(sym, bots, api)
+        bots[sym]['tr'].set_on_close_callback(cb)
 
-        # Descargar historial inicial para esta moneda
         raw_data = api.get_historical_data(sym, config.TIMEFRAME, limit=1000)
         if raw_data is not None:
-            bots[sym]['engine'].prepare_features(raw_data)
+            bots[sym]['last_features'] = bots[sym]['engine'].prepare_features(raw_data)
             bots[sym]['brain'].nightly_retrain()
+        else:
+            bots[sym]['last_features'] = None
+            logger.warning(f"No se pudo obtener datos iniciales para {sym}")
 
     sleep_start = dtime(config.SLEEP_START_HOUR, config.SLEEP_START_MINUTE)
     sleep_end = dtime(config.SLEEP_END_HOUR, config.SLEEP_END_MINUTE)
-    
-    files_to_watch = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py', 'storage/settings.json']
-    last_mod_times = {f: os.path.getmtime(f) for f in files_to_watch if os.path.exists(f)}
+
+    last_mod_times = {f: os.path.getmtime(f) for f in FILES_TO_WATCH if os.path.exists(f)}
     already_slept = False
+    last_backup_dt = None
 
     while True:
         # ── CICLO CIRCADIANO GLOBAL ──────────────────────────────────────────
         if is_sleep_time():
             if not already_slept:
                 print(f"\n🌙 MODO SUEÑO ({datetime.now().strftime('%H:%M')})")
-                for sym in PARES_ACTIVOS:
+                for sym in pares_activos:
                     bots[sym]['brain'].nightly_retrain()
                 already_slept = True
-                print(f"⏳ Durmiendo hasta las {sleep_end.strftime('%H:%M')}...")
+                logger.info(f"⏳ Modo Sueño: Flota en mantenimiento hasta las {sleep_end.strftime('%H:%M')}")
             time.sleep(30)
             continue
 
@@ -115,7 +122,16 @@ def main():
             print(f"\n☀️ DESPERTANDO FLOTA")
             already_slept = False
 
-        # A. Hot-Reload (Global)
+        # --- SISTEMA DE SEGURIDAD: BACKUP AUTOMÁTICO ---
+        now_dt = datetime.now()
+        if last_backup_dt is None or (now_dt - last_backup_dt).days >= 1:
+            if os.path.exists(config.DB_PATH):
+                backup_name = f"mirage_safe_{now_dt.strftime('%Y%m%d_%H%M')}.db"
+                backup_path = os.path.join(config.BACKUP_DIR, backup_name)
+                shutil.copy(config.DB_PATH, backup_path)
+                logger.info(f"🛡️ Seguridad: Backup de base de datos creado en {backup_name}")
+            last_backup_dt = now_dt
+
         has_updates, last_mod_times = check_for_updates(last_mod_times)
         if has_updates:
             print("\n💡 Actualización detectada — recargando módulos base...")
@@ -123,30 +139,47 @@ def main():
             importlib.reload(config)
             importlib.reload(tracker)
             importlib.reload(data_engine)
+            importlib.reload(brain)
             logger.info("⚙️ Configuración actualizada desde el Dashboard")
-            
-            for sym in PARES_ACTIVOS:
-                memoria = bots[sym]['tr'].active_trades
-                bots[sym]['rm'] = risk_manager.RiskManager()
-                bots[sym]['tr'] = tracker.TradeTracker(symbol=sym) # Recarga con símbolo
-                bots[sym]['tr'].active_trades = memoria
-                bots[sym]['tr'].set_on_close_callback(make_callback(sym))
-                bots[sym]['engine'] = data_engine.DataEngine()
+            # Actualizar pares por si cambiaron en config
+            pares_activos = config.PARES_ACTIVOS
+
+            for sym in pares_activos:
+                if sym not in bots:
+                    # Nuevo par añadido en caliente
+                    bots[sym] = {
+                        'engine': data_engine.DataEngine(),
+                        'brain': brain.MirageBrain(symbol=sym),
+                        'rm': risk_manager.RiskManager(),
+                        'tr': tracker.TradeTracker(symbol=sym),
+                        'cooldown_left': 0,
+                        'consecutive_errors': 0,
+                        'last_features': None,
+                    }
+                else:
+                    memoria = bots[sym]['tr'].active_trades
+                    bots[sym]['rm'] = risk_manager.RiskManager()
+                    bots[sym]['tr'] = tracker.TradeTracker(symbol=sym)
+                    bots[sym]['tr'].active_trades = memoria
+                    bots[sym]['engine'] = data_engine.DataEngine()
+                    bots[sym]['brain'] = brain.MirageBrain(symbol=sym) # Re-instanciar IA
+
+                cb = make_callback(sym, bots, api)
+                bots[sym]['tr'].set_on_close_callback(cb)
+
             print("✅ Toda la flota actualizada.\n")
 
-        if not api.paper_trading:
-            account_balance = api.get_balance()
+        account_balance = api.get_balance()
+        available_margin = api.get_available_margin()
 
-        # Variables para el Dashboard Web
         global_btc_features = None
         web_operaciones_activas = []
         web_pnl_global = 0
         web_trades_global = 0
         web_wins_global = 0
 
-        # ── CICLO DE ANÁLISIS POR MONEDA ─────────────────────────────────────
         print("\n" + "═" * 64)
-        for sym in PARES_ACTIVOS:
+        for sym in pares_activos:
             b = bots[sym]
             try:
                 live_data = api.get_historical_data(sym, config.TIMEFRAME, limit=200)
@@ -159,17 +192,27 @@ def main():
                 last_row = features.iloc[-1].to_dict()
                 atr_current = last_row['ATR']
 
-                # Guardar BTC para correlación de las demás
                 if sym == 'BTCUSDT':
                     global_btc_features = features
 
-                # Trailing stop
                 with b['tr']._trades_lock:
                     trades_to_process = list(b['tr'].active_trades)
 
                 for t in trades_to_process:
                     if 'is_trailing' not in t:
                         t['is_trailing'] = False
+                    if 'is_breakeven' not in t:
+                        t['is_breakeven'] = False
+
+                    # --- Gestión de Breakeven Automático ---
+                    new_be = b['rm'].calculate_breakeven_stop(t, current_price)
+                    if new_be is not None:
+                        logger.info(f"🛡️ {sym} Breakeven: SL movido a entrada ({new_be})")
+                        t['sl'] = new_be
+                        t['is_breakeven'] = True
+                        t['use_sl'] = True
+                        t['is_trailing'] = False # El trailing toma el control después
+
                     new_sl = b['rm'].calculate_trailing_stop(t, current_price, atr_current)
                     if new_sl is not None and new_sl != t['sl']:
                         logger.info(f"{sym} trailing stop updated: {t['sl']} → {new_sl}")
@@ -178,7 +221,6 @@ def main():
                         t['use_sl'] = True
                         t['is_trailing'] = True
 
-                # Vigilancia
                 trades_before = len(b['tr'].active_trades)
                 b['tr'].update_market_price(current_price)
                 if len(b['tr'].active_trades) < trades_before:
@@ -186,20 +228,17 @@ def main():
                     if consecutive_losses > 0:
                         b['cooldown_left'] = config.COOLDOWN_CANDLES
 
-                # Estadísticas Locales
                 total, wins, losses, wr, pnl = b['tr'].get_dashboard_stats()
                 web_pnl_global += pnl
                 web_trades_global += total
                 web_wins_global += wins
 
                 c_wins, c_losses = b['rm'].get_streak_info()
-                
-                # Imprimir estado en consola por moneda
+
                 print(f"📊 {sym: <8} | {current_price:>10,.2f} USDT | WR: {wr:>4.1f}% | PnL: {pnl:>7.4f}")
                 if b['cooldown_left'] > 0:
                     print(f"   ⏸️  Cooldown: {b['cooldown_left']} vela(s)")
 
-                # Preparar datos flotantes para la web
                 with b['tr']._trades_lock:
                     active_trades_snapshot = list(b['tr'].active_trades)
 
@@ -213,15 +252,37 @@ def main():
                         "tp": round(t['tp'], 2) if t['tp'] else 0,
                         "sl": round(t['sl'], 2) if t['sl'] else 0,
                         "current_pnl": round(fpnl, 2),
-                        "is_trailing": t.get('is_trailing', False)
+                        "is_trailing": t.get('is_trailing', False),
+                        "is_breakeven": t.get('is_breakeven', False),
+                        "size": t.get('size', 0),
+                        "position_value": t.get('size', 0) * t.get('entry_price', 0)
                     })
 
-                # Predicción
+                # --- Lógica de Scale-In (DCA) ---
+                if 0 < len(active_trades_snapshot) < config.MAX_BULLETS:
+                    t_ref = active_trades_snapshot[0]
+                    dca_levels = b['rm'].calculate_averaging_levels(t_ref['entry_price'], atr_current, t_ref['action'])
+                    
+                    # Determinamos el índice del siguiente nivel de promediado a buscar.
+                    # Si hay 1 trade activo (la entrada inicial), buscamos el nivel 0 de la lista DCA.
+                    next_idx = len(active_trades_snapshot) - 1
+                    if next_idx < len(dca_levels):
+                        target_price = dca_levels[next_idx]
+                        is_hit = (t_ref['action'] == 'LONG' and current_price <= target_price) or \
+                                 (t_ref['action'] == 'SHORT' and current_price >= target_price)
+                        
+                        if is_hit:
+                            print(f"   🎯 {sym} SCALE-IN: Precio {current_price} alcanzó nivel {target_price}")
+                            size = b['rm'].calculate_position_size(available_margin, current_price, t_ref['sl'] if t_ref['sl'] != 0 else None)
+                            if size > 0:
+                                margin_needed = (size * current_price) / config.LEVERAGE
+                                api.occupy_margin(margin_needed)
+                                b['tr'].register_trade(t_ref['action'], current_price, size, t_ref['sl'], t_ref['tp'], last_row, t_ref.get('use_sl', True))
+
                 action_code, confidence, method_name, use_sl = b['brain'].get_consensus_prediction(
                     last_row, features_df=features, btc_features=global_btc_features if sym != 'BTCUSDT' else None
                 )
 
-                # Ejecución
                 can_trade = (
                     action_code is not None
                     and confidence > config.MIN_CONFIDENCE
@@ -231,9 +292,14 @@ def main():
 
                 if can_trade:
                     action_str = "LONG" if action_code == 1 else "SHORT"
-                    sl, tp = b['rm'].calculate_dynamic_stops(current_price, atr_current, action_str)
-                    size = b['rm'].calculate_position_size(account_balance, current_price, sl if use_sl else None)
+                    sl, tp = b['rm'].calculate_dynamic_stops(
+                        current_price, atr_current, action_str, 
+                        atr_pct=last_row.get('ATR_pct')
+                    )
+                    size = b['rm'].calculate_position_size(available_margin, current_price, sl if use_sl else None)
                     if size > 0:
+                        margin_needed = (size * current_price) / config.LEVERAGE
+                        api.occupy_margin(margin_needed)
                         print(f"   🧠 SEÑAL: {action_str} | {method_name.upper()} | conf: {confidence:.2%} | size: {size}")
                         b['tr'].register_trade(action_str, current_price, size, sl, tp, last_row, use_sl)
                 else:
@@ -244,7 +310,7 @@ def main():
                 b['consecutive_errors'] += 1
                 logger.error(f"Error processing {sym}: {e}", exc_info=True)
                 print(f"⚠️ Error en {sym}: {e}")
-        
+
         print("═" * 64)
 
         # ── ACTUALIZAR EL DASHBOARD WEB ──────────────────────────────────────
@@ -263,7 +329,8 @@ def main():
         except Exception as e:
             logger.error(f"Unexpected error updating dashboard: {e}")
 
-        time.sleep(60)
+        # Sinergia: Reducimos el tiempo de espera para que los cambios se vean casi al instante
+        time.sleep(5)
 
 if __name__ == "__main__":
     main()

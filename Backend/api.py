@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import json
 import os
+import sqlite3
 import logging
+import config as cfg
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +20,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
-CONFIG_PATH = "storage/settings.json"
-
-if not os.path.exists(CONFIG_PATH):
+if not os.path.exists(cfg.SETTINGS_PATH):
     default_settings = {
         "TIMEFRAME": "1m",
         "PAPER_BALANCE": 1000.0,
@@ -28,12 +28,9 @@ if not os.path.exists(CONFIG_PATH):
         "MIN_CONFIDENCE": 0.65,
         "LEVERAGE": 10
     }
-    os.makedirs("storage", exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    os.makedirs(cfg.STORAGE_DIR, exist_ok=True)
+    with open(cfg.SETTINGS_PATH, "w", encoding="utf-8") as f:
         json.dump(default_settings, f)
-
-# Ruta del archivo CSV de tu tracker
-TRACKER_FILE = "storage/trade_history.csv"
 
 @app.get("/")
 def read_root():
@@ -42,9 +39,8 @@ def read_root():
 @app.get("/api/dashboard")
 def get_dashboard_data():
     try:
-        # 1. LEER LA VERDAD ABSOLUTA DESDE EL BOT
         try:
-            with open("storage/live_state.json", "r", encoding="utf-8") as f:
+            with open(cfg.LIVE_STATE_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except FileNotFoundError:
             logger.info("live_state.json not found, returning default data")
@@ -52,19 +48,32 @@ def get_dashboard_data():
                 "pnl_total": 0, "win_rate": 0, "total_operaciones": 0, "operaciones_activas": []
             }
 
-        # 2. LEER EL CSV SOLO PARA EL HISTORIAL Y LA GRÁFICA
-        try:
-            df = pd.read_csv("storage/trade_history.csv")
-            df['pnl_acumulado'] = df['pnl_usdt'].cumsum()
+        # Sinergia: Enviamos los pares activos actuales para que el frontend ajuste sus WebSockets
+        data["pares_activos"] = cfg.PARES_ACTIVOS
 
-            data["chart_data"] = df.tail(30)[['timestamp', 'pnl_acumulado']].rename(columns={'pnl_acumulado': 'pnl', 'timestamp': 'time'}).to_dict(orient="records")
-            data["ultimas_operaciones"] = df.tail(100).to_dict(orient="records")
-        except FileNotFoundError:
-            logger.warning("trade_history.csv not found")
-            data["chart_data"] = []
-            data["ultimas_operaciones"] = []
-        except Exception as e:
-            logger.error(f"Error reading trade history: {e}")
+        # Cambio de fuente: Leer desde SQLite en lugar de CSV
+        if os.path.exists(cfg.DB_PATH):
+            try:
+                conn = sqlite3.connect(cfg.DB_PATH)
+                # Filtramos UNKNOWN directamente en el query para mayor eficiencia
+                query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' ORDER BY timestamp ASC"
+                df = pd.read_sql(query, conn)
+                conn.close()
+
+                if not df.empty:
+                    df['pnl_acumulado'] = df['pnl_usdt'].cumsum()
+                    data["chart_data"] = df.tail(30)[['timestamp', 'pnl_acumulado']].rename(
+                        columns={'pnl_acumulado': 'pnl', 'timestamp': 'time'}
+                    ).to_dict(orient="records")
+                    data["ultimas_operaciones"] = df.tail(100).to_dict(orient="records")
+                else:
+                    data["chart_data"] = []
+                    data["ultimas_operaciones"] = []
+            except Exception as e:
+                logger.error(f"Error reading history from DB: {e}")
+                data["chart_data"] = []
+                data["ultimas_operaciones"] = []
+        else:
             data["chart_data"] = []
             data["ultimas_operaciones"] = []
 
@@ -72,13 +81,28 @@ def get_dashboard_data():
     except Exception as e:
         logger.error(f"Error in get_dashboard_data: {e}")
         return {"error": str(e)}
-    
+
+@app.get("/api/performance")
+async def get_full_performance():
+    """Devuelve el historial completo de operaciones para análisis profundo."""
+    try:
+        if os.path.exists(cfg.DB_PATH):
+            conn = sqlite3.connect(cfg.DB_PATH)
+            df = pd.read_sql("SELECT * FROM trades ORDER BY timestamp ASC", conn)
+            conn.close()
+            data = df.to_dict(orient="records")
+            logger.info(f"📊 Sirviendo historial desde DB: {len(data)} registros encontrados.")
+            return data
+        return []
+    except Exception as e:
+        logger.error(f"Error reading full history: {e}")
+        return []
+
 
 @app.get("/api/parameters")
 def get_parameters_metadata():
-    """Devuelve estructura y validaciones de parámetros editables"""
     try:
-        with open("storage/parameters_metadata.json", "r", encoding="utf-8") as f:
+        with open(cfg.METADATA_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
         logger.error("parameters_metadata.json not found")
@@ -90,10 +114,10 @@ def get_parameters_metadata():
 @app.get("/api/config")
 def get_config():
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        logger.error(f"Config file not found at {CONFIG_PATH}")
+        logger.error(f"Config file not found at {cfg.SETTINGS_PATH}")
         return {}
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in config file: {e}")
@@ -104,6 +128,18 @@ def get_config():
 
 @app.post("/api/config")
 def update_config(new_settings: dict):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(new_settings, f, indent=4)
-    return {"status": "success"}
+    try:
+        current = {}
+        if os.path.exists(cfg.SETTINGS_PATH):
+            with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
+                current = json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not read existing config for merge: {e}")
+        current = {}
+
+    merged = {**current, **new_settings}
+
+    with open(cfg.SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=4)
+
+    return {"status": "success", "updated_keys": list(new_settings.keys())}

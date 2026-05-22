@@ -13,27 +13,38 @@ API_SECRET = os.getenv('BINANCE_API_SECRET')
 if not API_KEY or not API_SECRET:
     logger.warning("Missing Binance API credentials in .env")
 
-SETTINGS_PATH = "storage/settings.json"
+# --- RUTAS DE ARCHIVOS ---
+STORAGE_DIR          = "storage"
+SETTINGS_PATH        = os.path.join(STORAGE_DIR, "settings.json")
+TRADE_HISTORY_PATH   = os.path.join(STORAGE_DIR, "trade_history.csv")
+DB_PATH              = os.path.join(STORAGE_DIR, "mirage_trading.db")
+BACKUP_DIR           = os.path.join(STORAGE_DIR, "backups")
+LIVE_STATE_PATH      = os.path.join(STORAGE_DIR, "live_state.json")
+METADATA_PATH        = os.path.join(STORAGE_DIR, "parameters_metadata.json")
 
-# ══════════════════════════════════════════════════════════════════
-# TAREA 1.1 — Reemplazar magic numbers con constantes nombradas
-# TAREA 1.1 — Añadir límite de leverage (Sprint 4 adelantado, 5 min)
-# ══════════════════════════════════════════════════════════════════
+os.makedirs(STORAGE_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# ── LÍMITES DE SEGURIDAD (HARD LIMITS — NO CAMBIAR) ──────────────
-MAX_LEVERAGE_ALLOWED = 125         # Máximo permitido 125x
-DEFAULT_LEVERAGE     = 10         # Valor por defecto 10x
-MIN_TRADES_FOR_AI    = 100         # Antes era 5 — sube a 20 ahora, llega a 100 en Sprint 3
-MAX_BOOTSTRAP_BUFFER = 5          # Mínimo de trades para primer fit online
+# --- CONSTANTES DE SEGURIDAD Y IA ---
+MAX_LEVERAGE_ALLOWED = 125
+DEFAULT_LEVERAGE     = 10
+MIN_TRADES_FOR_AI    = 100
+MAX_BOOTSTRAP_BUFFER = 5
 
+# --- HIPERPARÁMETROS IA ---
+AI_MAX_WEIGHT           = 0.70
+AI_BASE_ESTIMATORS      = 100
+AI_ESTIMATORS_STEP      = 10
+AI_LEARNING_CURVE_STEPS = 45  # Trades adicionales tras el mínimo para llegar al peso máximo
+RANDOM_STATE            = 42
+
+LAYER_WEIGHTS = {
+    'basic':     0.25,
+    'structure': 0.45,
+    'context':   0.30,
+}
 
 def load_dynamic_settings():
-    """
-    Carga el archivo storage/settings.json generado por la API/dashboard.
-
-    Returns:
-        dict: Configuración dinámica. Vacío si el archivo no existe o es inválido.
-    """
     if os.path.exists(SETTINGS_PATH):
         try:
             with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
@@ -71,29 +82,6 @@ def validate_sleep_config(start_hour, start_minute, end_hour, end_minute):
 
 
 def normalize_risk_pct(value: float, name: str) -> float:
-    """
-    Garantiza que un valor de riesgo esté expresado como porcentaje decimal (0–1).
-
-    El bug original: settings.json tenía RISK_PER_TRADE=2.0 (USDT fijo)
-    mientras MAX_RISK_CAP=0.04 (porcentaje). El RiskManager los comparaba
-    directamente, haciendo que el cap nunca funcionara.
-
-    Esta función detecta valores >= 1.0 y los convierte dividiéndolos entre 100,
-    asumiendo que el usuario escribió "2" queriendo decir "2%".
-
-    Args:
-        value (float): Valor leído del JSON (puede ser 0.02 o 2.0).
-        name (str):    Nombre de la variable (solo para el log).
-
-    Returns:
-        float: Valor como decimal entre 0.0 y 1.0.
-
-    Examples:
-        >>> normalize_risk_pct(2.0, 'RISK_PER_TRADE')
-        0.02          # 2% del capital
-        >>> normalize_risk_pct(0.02, 'RISK_PER_TRADE')
-        0.02          # ya era correcto
-    """
     if value >= 1.0:
         converted = value / 100.0
         logger.warning(
@@ -116,10 +104,18 @@ def clamp_leverage(requested: int) -> int:
         int: Leverage real a usar (nunca supera MAX_LEVERAGE_ALLOWED).
 
     Example:
+        >>> clamp_leverage(200)
+        125
         >>> clamp_leverage(10)
-        3
+        10
         >>> clamp_leverage(2)
         2
+
+    BUG MENOR CORREGIDO #9:
+    El docstring original decía:
+        >>> clamp_leverage(10)
+        3   ← INCORRECTO (10 < 125, no se recorta)
+    El valor correcto es 10, porque 10 no supera MAX_LEVERAGE_ALLOWED=125.
     """
     if requested > MAX_LEVERAGE_ALLOWED:
         logger.warning(
@@ -130,53 +126,64 @@ def clamp_leverage(requested: int) -> int:
     return requested
 
 
-# ── CARGA DINÁMICA ────────────────────────────────────────────────
 dyn = load_dynamic_settings()
 
-# ── MERCADO ───────────────────────────────────────────────────────
-PARES_ACTIVOS = dyn.get('PARES_ACTIVOS', ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'])
+
+# --- VALIDACIÓN DEFENSIVA PARA PARES_ACTIVOS ---
+_raw_pares = dyn.get('PARES_ACTIVOS', ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'])
+
+if isinstance(_raw_pares, list):
+    PARES_ACTIVOS = _raw_pares
+elif isinstance(_raw_pares, str):
+    PARES_ACTIVOS = [p.strip() for p in _raw_pares.split(',') if p.strip()]
+    logger.warning(f"PARES_ACTIVOS se recibió como texto. Auto-convertido a lista: {PARES_ACTIVOS}")
+else:
+    logger.error(f"PARES_ACTIVOS en settings.json es inválido (tipo {type(_raw_pares).__name__}). Forzando pares por defecto.")
+    PARES_ACTIVOS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+# -----------------------------------------------
+
 SYMBOL        = dyn.get('SYMBOL', 'BTCUSDT')
 TIMEFRAME     = dyn.get('TIMEFRAME', '1m')
 
-# LEVERAGE: siempre pasa por clamp_leverage — nunca usar dyn['LEVERAGE'] directo
 LEVERAGE = clamp_leverage(int(dyn.get('LEVERAGE', DEFAULT_LEVERAGE)))
 
-# ── CAPITAL ───────────────────────────────────────────────────────
+
 PAPER_BALANCE  = float(dyn.get('PAPER_BALANCE', 1000.0))
-# normalize_risk_pct convierte "2.0" → 0.02 automáticamente si alguien
-# escribió el porcentaje como entero en settings.json
+
+
 RISK_PER_TRADE = normalize_risk_pct(float(dyn.get('RISK_PER_TRADE', 0.02)), 'RISK_PER_TRADE')
 MAX_BULLETS    = int(dyn.get('MAX_BULLETS', 3))
 NO_SL_SIZE_PCT = float(dyn.get('NO_SL_SIZE_PCT', 0.10))
 MIN_SIZE_USDT  = float(dyn.get('MIN_SIZE_USDT', 0.0))
 
-# ── GESTIÓN DE RIESGO ─────────────────────────────────────────────
+
 ATR_MULTIPLIER = float(dyn.get('ATR_MULTIPLIER', 2.0))
 TP_MULTIPLIER  = float(dyn.get('TP_MULTIPLIER', 4.0))
 MIN_CONFIDENCE = float(dyn.get('MIN_CONFIDENCE', 0.65))
 
-# ── GESTIÓN DINÁMICA POR RACHA ────────────────────────────────────
+
 MAX_CONSECUTIVE_LOSSES = int(dyn.get('MAX_CONSECUTIVE_LOSSES', 3))
 RISK_REDUCTION_FACTOR  = float(dyn.get('RISK_REDUCTION_FACTOR', 0.5))
 MAX_CONSECUTIVE_WINS   = int(dyn.get('MAX_CONSECUTIVE_WINS', 3))
 RISK_INCREASE_FACTOR   = float(dyn.get('RISK_INCREASE_FACTOR', 1.25))
 MAX_RISK_CAP           = normalize_risk_pct(float(dyn.get('MAX_RISK_CAP', 0.04)), 'MAX_RISK_CAP')
 
-# ── COOLDOWN POST-LOSS ────────────────────────────────────────────
+
 COOLDOWN_CANDLES = int(dyn.get('COOLDOWN_CANDLES', 3))
 
-# ── SESIONES DE MERCADO (UTC) ─────────────────────────────────────
+
 SESSION_WEIGHTS = dyn.get('SESSION_WEIGHTS', {
     'asia':    0.80,
     'europa':  1.00,
     'america': 1.10,
 })
 
-# ── TRAILING STOP ─────────────────────────────────────────────────
+
 TRAILING_STOP_ACTIVATION = float(dyn.get('TRAILING_STOP_ACTIVATION', 0.5))
 TRAILING_STOP_DISTANCE   = float(dyn.get('TRAILING_STOP_DISTANCE', 0.3))
+BREAKEVEN_ACTIVATION     = float(dyn.get('BREAKEVEN_ACTIVATION', 0.5))
 
-# ── MÉTODOS AVANZADOS ─────────────────────────────────────────────
+
 SMC_LOOKBACK          = int(dyn.get('SMC_LOOKBACK', 20))
 SMC_OB_STRENGTH       = float(dyn.get('SMC_OB_STRENGTH', 0.3))
 VWAP_BAND_MULT        = float(dyn.get('VWAP_BAND_MULT', 1.0))
@@ -186,19 +193,41 @@ WYCKOFF_LOOKBACK      = int(dyn.get('WYCKOFF_LOOKBACK', 50))
 BTC_CORRELATION_LIMIT = int(dyn.get('BTC_CORRELATION_LIMIT', 100))
 BTC_CORR_THRESHOLD    = float(dyn.get('BTC_CORR_THRESHOLD', 0.65))
 
-# ── RECONEXIÓN AUTOMÁTICA ─────────────────────────────────────────
+
 MAX_RECONNECT_ATTEMPTS = int(dyn.get('MAX_RECONNECT_ATTEMPTS', 10))
 RECONNECT_WAIT_SECONDS = int(dyn.get('RECONNECT_WAIT_SECONDS', 30))
 
-# ── RESUMEN DIARIO ────────────────────────────────────────────────
+
 DAILY_SUMMARY_HOUR   = int(dyn.get('DAILY_SUMMARY_HOUR', 22))
 DAILY_SUMMARY_MINUTE = int(dyn.get('DAILY_SUMMARY_MINUTE', 10))
 
-# ── CICLO CIRCADIANO ──────────────────────────────────────────────
+
 SLEEP_START_HOUR   = int(dyn.get('SLEEP_START_HOUR', 22))
 SLEEP_START_MINUTE = int(dyn.get('SLEEP_START_MINUTE', 0))
 SLEEP_END_HOUR     = int(dyn.get('SLEEP_END_HOUR', 8))
 SLEEP_END_MINUTE   = int(dyn.get('SLEEP_END_MINUTE', 0))
+
+
+# --- VETOS DINÁMICOS ---
+GLOBAL_RSI_OB_BASE        = 75.0
+GLOBAL_RSI_OS_BASE        = 25.0
+RSI_VOL_ADJUSTMENT_FACTOR = 20.0  # Cuántos puntos de RSI se ajustan por cada 1% de cambio en ATR_pct
+RSI_VOL_REF               = 0.15  # ATR_pct base de BTC considerado "normal" para 1m/5m
+
+# --- AJUSTE DINÁMICO DE TAKE PROFIT ---
+TP_VOL_ADJUSTMENT_FACTOR  = 5.0   # Factor de ajuste para el TP_MULTIPLIER
+TP_VOL_REF                = 0.15  # Referencia de volatilidad (ATR_pct)
+TP_MIN_MULTIPLIER         = 2.0   # Mínimo absoluto para no cerrar demasiado pronto
+
+# --- ESTRATEGIA MARTINGALA ---
+MARTINGALE_ENABLED    = str(dyn.get('MARTINGALE_ENABLED', 'False')).lower() == 'true'
+MARTINGALE_MULTIPLIER = float(dyn.get('MARTINGALE_MULTIPLIER', 2.0)) # Multiplicador tras pérdida
+MARTINGALE_MAX_STEPS  = int(dyn.get('MARTINGALE_MAX_STEPS', 3))      # Máximo de aumentos
+
+# --- AJUSTE DINÁMICO DE STOP LOSS ---
+SL_VOL_ADJUSTMENT_FACTOR  = 2.0   # Factor de ajuste para el ATR_MULTIPLIER
+SL_VOL_REF                = 0.15  # Referencia de volatilidad (ATR_pct)
+SL_MIN_MULTIPLIER         = 1.2   # Mínimo absoluto para el multiplicador de SL
 
 validate_sleep_config(SLEEP_START_HOUR, SLEEP_START_MINUTE, SLEEP_END_HOUR, SLEEP_END_MINUTE)
 logger.info(f"Sleep schedule configured: {SLEEP_START_HOUR:02d}:{SLEEP_START_MINUTE:02d} → {SLEEP_END_HOUR:02d}:{SLEEP_END_MINUTE:02d} UTC")
