@@ -32,7 +32,7 @@ if not os.path.exists(CONFIG_PATH):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(default_settings, f)
 
-# Ruta del archivo CSV de tu tracker
+
 TRACKER_FILE = "storage/trade_history.csv"
 
 @app.get("/")
@@ -42,7 +42,6 @@ def read_root():
 @app.get("/api/dashboard")
 def get_dashboard_data():
     try:
-        # 1. LEER LA VERDAD ABSOLUTA DESDE EL BOT
         try:
             with open("storage/live_state.json", "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -52,7 +51,6 @@ def get_dashboard_data():
                 "pnl_total": 0, "win_rate": 0, "total_operaciones": 0, "operaciones_activas": []
             }
 
-        # 2. LEER EL CSV SOLO PARA EL HISTORIAL Y LA GRÁFICA
         try:
             df = pd.read_csv("storage/trade_history.csv")
             df['pnl_acumulado'] = df['pnl_usdt'].cumsum()
@@ -72,11 +70,10 @@ def get_dashboard_data():
     except Exception as e:
         logger.error(f"Error in get_dashboard_data: {e}")
         return {"error": str(e)}
-    
+
 
 @app.get("/api/parameters")
 def get_parameters_metadata():
-    """Devuelve estructura y validaciones de parámetros editables"""
     try:
         with open("storage/parameters_metadata.json", "r", encoding="utf-8") as f:
             return json.load(f)
@@ -104,6 +101,26 @@ def get_config():
 
 @app.post("/api/config")
 def update_config(new_settings: dict):
+    # BUG MEDIO CORREGIDO #5:
+    # El endpoint original sobrescribía el archivo completo con lo que mandara el
+    # frontend, perdiendo cualquier clave no incluida en la petición.
+    # Ejemplo: si el frontend solo manda {"LEVERAGE": 5}, el resto de claves
+    # (TIMEFRAME, PAPER_BALANCE, etc.) se borraban del JSON.
+    #
+    # Ahora se hace un merge: se lee la config actual y solo se actualizan
+    # los campos que vienen en new_settings.
+    try:
+        current = {}
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                current = json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not read existing config for merge: {e}")
+        current = {}
+
+    merged = {**current, **new_settings}
+
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(new_settings, f, indent=4)
-    return {"status": "success"}
+        json.dump(merged, f, indent=4)
+
+    return {"status": "success", "updated_keys": list(new_settings.keys())}

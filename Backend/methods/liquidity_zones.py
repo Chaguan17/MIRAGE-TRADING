@@ -2,6 +2,29 @@ import numpy as np
 import config
 
 
+def _get_psych_step(price: float) -> float:
+    """
+    BUG MEDIO CORREGIDO #8:
+    El paso para niveles psicológicos estaba hardcodeado en 500, lo cual
+    solo es apropiado para BTC (~60k+). Para ETH (~3k) debería ser 100 o 50,
+    y para BNB (~600) debería ser 10 o 25.
+
+    Ahora el paso se calcula dinámicamente según el precio del activo:
+    - precio >= 10 000 : paso de 500   (BTC)
+    - precio >= 1 000  : paso de 100   (ETH)
+    - precio >= 100    : paso de 10    (BNB, SOL, etc.)
+    - precio <  100    : paso de 1     (activos de bajo precio)
+    """
+    if price >= 10_000:
+        return 500.0
+    elif price >= 1_000:
+        return 100.0
+    elif price >= 100:
+        return 10.0
+    else:
+        return 1.0
+
+
 def analyze(features):
     if len(features) < config.LIQ_LOOKBACK + 5:
         return None, 0
@@ -27,8 +50,9 @@ def analyze(features):
         if window[i] <= window[i-1] and window[i] <= window[i+1]:
             liq_lows.append(window[i])
 
-    round_level  = round(price / 500) * 500
-    psych_levels = [round_level - 500, round_level, round_level + 500]
+    step         = _get_psych_step(price)
+    round_level  = round(price / step) * step
+    psych_levels = [round_level - step, round_level, round_level + step]
 
     all_highs = liq_highs + [l for l in psych_levels if l > price]
     all_lows  = liq_lows  + [l for l in psych_levels if l < price]

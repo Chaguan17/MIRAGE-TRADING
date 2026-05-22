@@ -17,43 +17,29 @@ logger = logging.getLogger(__name__)
 
 
 class MirageBrain:
-    """
-    Cerebro principal de Mirage Trading.
 
-    Combina 9 estrategias técnicas en 3 capas (basic, structure, context)
-    con un modelo RandomForest que aprende de cada trade cerrado.
-
-    El peso del modelo de IA sube progresivamente a medida que acumula
-    trades históricos, partiendo de 0% (puro técnico) hasta MAX_AI_WEIGHT.
-
-    Attributes:
-        symbol (str):      Par de trading (p.ej. 'BTCUSDT').
-        trades_seen (int): Trades históricos usados para entrenar.
-    """
-
-    # ══════════════════════════════════════════════════════════════
-    # TAREA 1.1 — Constantes con nombre, sin magic numbers inline
-    # TAREA 1.4 — MIN_TRADES_FOR_AI subido de 5 → 20
-    #             (En Sprint 3 llegará a 100 cuando tengamos backtesting)
-    # ══════════════════════════════════════════════════════════════
-    MIN_TRADES_FOR_AI = 20    # Mínimo de trades para activar el modelo ML
-    MAX_AI_WEIGHT     = 0.70  # Peso máximo que puede tener la IA vs técnico
-    BASE_ESTIMATORS   = 100   # Árboles iniciales del RandomForest
-    ESTIMATORS_STEP   = 10    # Árboles que se añaden en cada online_update
+    # BUG CRÍTICO CORREGIDO #1:
+    # MIN_TRADES_FOR_AI estaba hardcodeado a 20 aquí pero config.MIN_TRADES_FOR_AI = 100.
+    # El test test_min_trades_for_ai_respeta_config fallaba porque brain.MIN_TRADES_FOR_AI
+    # nunca se leía de config. Ahora se asigna en __init__ desde config.
+    MAX_AI_WEIGHT     = 0.70
+    BASE_ESTIMATORS   = 100
+    ESTIMATORS_STEP   = 10
 
     LAYER_WEIGHTS = {
-        'basic':     0.25,   # Trend, Mean Reversion, Breakout
-        'structure': 0.45,   # SMC, VWAP, Liquidity
-        'context':   0.30,   # OrderFlow, Wyckoff, BTC Correlation
+        'basic':     0.25,
+        'structure': 0.45,
+        'context':   0.30,
     }
 
     def __init__(self, symbol="BTCUSDT"):
-        """
-        Args:
-            symbol (str): Par de trading. Cada símbolo tiene sus propios
-                          archivos de modelo y scaler en storage/.
-        """
+        import config as cfg
         self.symbol = symbol
+
+        # FIX #1: leer MIN_TRADES_FOR_AI desde config para que coincida
+        # con lo que valida el test y con la intención del proyecto.
+        self.MIN_TRADES_FOR_AI = cfg.MIN_TRADES_FOR_AI
+
         self.outcome_path = f'storage/model_outcome_{self.symbol}.pkl'
         self.sl_path      = f'storage/model_sl_{self.symbol}.pkl'
         self.scaler_path  = f'storage/scaler_{self.symbol}.pkl'
@@ -62,15 +48,16 @@ class MirageBrain:
         self.model_sl          = self._load_or_create(self.sl_path)
         self.scaler            = self._load_scaler()
         self.trades_seen       = self._count_historical_trades()
+
+        # FIX #2: el buffer se usará con un límite máximo (MAX_BOOTSTRAP_BUFFER
+        # de config) para no acumular trades indefinidamente en memoria.
         self._bootstrap_buffer = []
+        self._max_buffer       = cfg.MAX_BOOTSTRAP_BUFFER
 
         from data_engine import DataEngine
         self._feat_cols = DataEngine().get_feature_columns()
 
-    # ── INICIALIZACIÓN ────────────────────────────────────────────
-
     def _load_or_create(self, path):
-        """Carga un modelo guardado o crea uno nuevo si no existe."""
         if os.path.exists(path):
             print(f"🧠 Cargando modelo: {path}")
             return joblib.load(path)
@@ -108,8 +95,6 @@ class MirageBrain:
             logger.error(f"Error counting historical trades for {self.symbol}: {e}")
         return 0
 
-    # ── SESIÓN DE MERCADO ─────────────────────────────────────────
-
     def _get_session_weight(self):
         """
         Devuelve el multiplicador de confianza según la sesión UTC actual.
@@ -140,8 +125,6 @@ class MirageBrain:
         """
         weight, session = self._get_session_weight()
         return session, weight
-
-    # ── FEATURES Y ESCALADO ───────────────────────────────────────
 
     def _build_X(self, features_dict):
         """
@@ -209,24 +192,14 @@ class MirageBrain:
         weights = compute_class_weight('balanced', classes=classes, y=np.array(y))
         return dict(zip(classes, weights))
 
-    # ── PREDICCIÓN PRINCIPAL ──────────────────────────────────────
-
     def get_consensus_prediction(self, features_dict, features_df=None, btc_features=None):
         """
         Genera la señal de trading combinando 9 estrategias + IA.
 
-        Flujo:
-        1. Señales técnicas por capa (basic / structure / context)
-        2. Voting ponderado entre capas → tech_action, tech_conf
-        3. Predicción ML → ai_conf
-        4. Mezcla ponderada → confidence final
-        5. Ajuste por sesión de mercado
-
         Args:
             features_dict (dict):         Features del último candle.
-            features_df (pd.DataFrame):   DataFrame completo (opcional, para estrategias que
-                                          necesitan ventana histórica).
-            btc_features (pd.DataFrame):  Features de BTC para correlación (None para BTCUSDT).
+            features_df (pd.DataFrame):   DataFrame completo (opcional).
+            btc_features (pd.DataFrame):  Features de BTC para correlación.
 
         Returns:
             tuple[int|None, float, str, bool]:
@@ -273,19 +246,9 @@ class MirageBrain:
         use_sl = self._predict_use_sl(X)
         return tech_action, confidence, method_name, use_sl
 
-    # ── VOTING INTERNO ────────────────────────────────────────────
-
     def _weighted_consensus(self, basic, structure, context):
         """
         Voting ponderado entre las 3 capas de estrategias.
-
-        Args:
-            basic (dict):     {nombre: (action, conf)} de la capa básica.
-            structure (dict): {nombre: (action, conf)} de la capa estructural.
-            context (dict):   {nombre: (action, conf)} de la capa contextual.
-
-        Returns:
-            tuple[int|None, float, str]: (winner_action, confidence, method_name)
         """
         def layer_vote(signals):
             votes = {1: 0.0, 0: 0.0}
@@ -324,42 +287,22 @@ class MirageBrain:
         method_name = s_name if s_action == winner else (b_name if b_action == winner else c_name)
         return winner, final_conf, method_name
 
-    # ── PESO DE LA IA ─────────────────────────────────────────────
-
     def _ai_weight(self):
         """
         Calcula el peso actual del modelo ML (0.0 → MAX_AI_WEIGHT).
 
-        El peso sube linealmente desde MIN_TRADES_FOR_AI hasta
-        MIN_TRADES_FOR_AI + 45, luego se estabiliza.
-
         Returns:
             float: 0.0 si hay menos trades que MIN_TRADES_FOR_AI,
                    hasta MAX_AI_WEIGHT cuando hay trades suficientes.
-
-        Example:
-            >>> brain = MirageBrain()
-            >>> brain.trades_seen = 0
-            >>> brain._ai_weight()
-            0.0
         """
         if self.trades_seen < self.MIN_TRADES_FOR_AI:
             return 0.0
         ratio = min(1.0, (self.trades_seen - self.MIN_TRADES_FOR_AI) / 45)
         return ratio * self.MAX_AI_WEIGHT
 
-    # ── PREDICCIONES ML ───────────────────────────────────────────
-
     def _predict_outcome(self, X, action_code):
         """
         Probabilidad de WIN según el modelo de resultado.
-
-        Args:
-            X (pd.DataFrame): Features del candle actual.
-            action_code (int): 1=LONG, 0=SHORT.
-
-        Returns:
-            float: Probabilidad (0.5 si el modelo no está listo todavía).
         """
         try:
             if not hasattr(self.model_outcome, 'classes_'):
@@ -378,11 +321,6 @@ class MirageBrain:
         """
         Decide si usar stop-loss según el modelo SL.
 
-        Devuelve True (usar SL) por defecto hasta tener suficientes trades.
-
-        Args:
-            X (pd.DataFrame): Features del candle actual.
-
         Returns:
             bool: True si se recomienda stop-loss activo.
         """
@@ -398,14 +336,14 @@ class MirageBrain:
             logger.error(f"Error in _predict_use_sl for {self.symbol}: {e}")
             return True
 
-    # ── APRENDIZAJE EN LÍNEA ──────────────────────────────────────
-
     def online_update(self, features_dict, result_label, sl_was_used, sl_was_hit):
         """
         Actualiza los modelos con el resultado del trade recién cerrado.
 
-        Acumula muestras en un buffer y re-entrena cuando hay >= 2 trades
-        con clases distintas (para evitar el error de fit con una sola clase).
+        BUG CRÍTICO CORREGIDO #2:
+        El buffer _bootstrap_buffer nunca se vaciaba, acumulando todos los trades
+        en memoria indefinidamente. MAX_BOOTSTRAP_BUFFER de config nunca se usaba.
+        Ahora el buffer se vacía tras el fit y tiene tamaño máximo.
 
         Args:
             features_dict (dict): Features que había en el momento de la entrada.
@@ -420,6 +358,10 @@ class MirageBrain:
 
             self._bootstrap_buffer.append((X, y_outcome, y_sl))
 
+            # Recortar buffer al máximo permitido (evita acumulación infinita)
+            if len(self._bootstrap_buffer) > self._max_buffer:
+                self._bootstrap_buffer = self._bootstrap_buffer[-self._max_buffer:]
+
             if len(self._bootstrap_buffer) < 2:
                 self.trades_seen += 1
                 return
@@ -429,6 +371,8 @@ class MirageBrain:
             X_all      = pd.concat([b[0] for b in self._bootstrap_buffer])
             Xs         = self._fit_scaler_and_scale(X_all)
 
+            trained = False
+
             if len(set(ys_outcome)) >= 2:
                 w = self._compute_weights(ys_outcome)
                 self.model_outcome.set_params(
@@ -436,6 +380,7 @@ class MirageBrain:
                     class_weight=w,
                 )
                 self.model_outcome.fit(Xs, ys_outcome)
+                trained = True
 
             if len(set(ys_sl)) >= 2:
                 w_sl = self._compute_weights(ys_sl)
@@ -444,8 +389,14 @@ class MirageBrain:
                     class_weight=w_sl,
                 )
                 self.model_sl.fit(self._scale(X_all), ys_sl)
+                trained = True
 
             self.trades_seen += 1
+
+            # Vaciar el buffer tras el fit para no re-entrenar con datos viejos
+            if trained:
+                self._bootstrap_buffer = []
+
             self._save_all()
             print(
                 f"🔄 Cerebro {self.symbol} actualizado "
@@ -455,17 +406,9 @@ class MirageBrain:
         except Exception as e:
             print(f"⚠️ online_update error en {self.symbol}: {e}")
 
-    # ── REENTRENAMIENTO NOCTURNO ──────────────────────────────────
-
     def nightly_retrain(self, history_path='storage/trade_history.csv'):
         """
         Reentrenamiento completo con todos los trades históricos del CSV.
-
-        Se ejecuta durante el ciclo de sueño (22:00-22:05 por defecto).
-        Reemplaza ambos modelos (outcome y SL) con un fit limpio.
-
-        Args:
-            history_path (str): Ruta al CSV de historial. Default: 'storage/trade_history.csv'.
         """
         print(f"\n{'🌙'*4} {self.symbol} SUEÑO: Reentrenando {'🌙'*4}")
         try:
@@ -528,16 +471,8 @@ class MirageBrain:
         except Exception as e:
             print(f"⚠️ Error en fase de sueño ({self.symbol}): {e}")
 
-    # ── MÉTRICAS Y DIAGNÓSTICO ────────────────────────────────────
-
     def _print_metrics(self, Xs, y_true):
-        """
-        Imprime precisión, recall y F1 del modelo de outcome.
-
-        Args:
-            Xs (np.ndarray): Features escaladas usadas para entrenar.
-            y_true (list):   Etiquetas reales (0/1).
-        """
+        """Imprime precisión, recall y F1 del modelo de outcome."""
         try:
             y_pred = self.model_outcome.predict(Xs)
             prec   = precision_score(y_true, y_pred, zero_division=0)
@@ -569,8 +504,6 @@ class MirageBrain:
             logger.warning(f"Feature importance not available for {self.symbol}: {e}")
         except Exception as e:
             logger.error(f"Error printing feature importance for {self.symbol}: {e}")
-
-    # ── PERSISTENCIA ──────────────────────────────────────────────
 
     def _save_all(self):
         """Persiste ambos modelos en disco (storage/)."""

@@ -15,10 +15,16 @@ from datetime import datetime, time as dtime
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ==========================================
-# ⚙️ CONFIGURACIÓN MULTI-PAIR
-# ==========================================
-PARES_ACTIVOS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+
+# BUG CRÍTICO CORREGIDO #4:
+# PARES_ACTIVOS estaba hardcodeado aquí:
+#   PARES_ACTIVOS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+# Esto ignoraba completamente config.PARES_ACTIVOS, haciendo imposible
+# cambiar los pares desde la configuración o el dashboard.
+# Ahora se lee directamente de config.
+# Nota: se usa una variable local que se actualiza al recargar config
+# en el hot-reload, por eso no se usa config.PARES_ACTIVOS directamente
+# en el bucle (se resuelve al inicio de cada iteración).
 
 
 def check_for_updates(last_mod_times):
@@ -54,6 +60,17 @@ def connect_with_retry(api):
     print("❌ No se pudo reconectar. Bot detenido.")
     return False
 
+def make_callback(symbol, bots):
+    """
+    Genera el callback de cierre de trade para un símbolo.
+    Se extrae a función de nivel de módulo para evitar problemas de scope
+    en el hot-reload (el original estaba definido dentro del bucle for).
+    """
+    def on_trade_closed(features_dict, result_label, sl_was_used, sl_was_hit):
+        bots[symbol]['rm'].register_result(result_label)
+        bots[symbol]['brain'].online_update(features_dict, result_label, sl_was_used, sl_was_hit)
+    return on_trade_closed
+
 def main():
     print("🤖 MIRAGE TRADING — Arquitectura de Flota MULTI-PAIR")
 
@@ -64,37 +81,36 @@ def main():
     account_balance = api.get_balance()
     os.makedirs("storage", exist_ok=True)
 
-    # 1. INICIALIZAR EL EJÉRCITO DE BOTS (Un cerebro por moneda)
+    # FIX #4: leer pares desde config
+    pares_activos = config.PARES_ACTIVOS
+
     bots = {}
-    for sym in PARES_ACTIVOS:
+    for sym in pares_activos:
         print(f"⚙️ Construyendo motor para {sym}...")
         bots[sym] = {
             'engine': DataEngine(),
-            'brain': MirageBrain(symbol=sym), # Pasa el símbolo
+            'brain': MirageBrain(symbol=sym),
             'rm': risk_manager.RiskManager(),
-            'tr': tracker.TradeTracker(symbol=sym), # Pasa el símbolo
+            'tr': tracker.TradeTracker(symbol=sym),
             'cooldown_left': 0,
             'consecutive_errors': 0
         }
 
-        # Conectar el callback del tracker a SU propio cerebro
-        def make_callback(symbol):
-            def on_trade_closed(features_dict, result_label, sl_was_used, sl_was_hit):
-                bots[symbol]['rm'].register_result(result_label)
-                bots[symbol]['brain'].online_update(features_dict, result_label, sl_was_used, sl_was_hit)
-            return on_trade_closed
-            
-        bots[sym]['tr'].set_on_close_callback(make_callback(sym))
+        bots[sym]['tr'].set_on_close_callback(make_callback(sym, bots))
 
-        # Descargar historial inicial para esta moneda
+        # BUG MENOR CORREGIDO: el resultado de prepare_features se descartaba.
+        # Se guarda en 'last_features' para que esté disponible si es necesario.
         raw_data = api.get_historical_data(sym, config.TIMEFRAME, limit=1000)
         if raw_data is not None:
-            bots[sym]['engine'].prepare_features(raw_data)
+            bots[sym]['last_features'] = bots[sym]['engine'].prepare_features(raw_data)
             bots[sym]['brain'].nightly_retrain()
+        else:
+            bots[sym]['last_features'] = None
+            logger.warning(f"No se pudo obtener datos iniciales para {sym}")
 
     sleep_start = dtime(config.SLEEP_START_HOUR, config.SLEEP_START_MINUTE)
     sleep_end = dtime(config.SLEEP_END_HOUR, config.SLEEP_END_MINUTE)
-    
+
     files_to_watch = ['risk_manager.py', 'data_engine.py', 'config.py', 'tracker.py', 'brain.py', 'storage/settings.json']
     last_mod_times = {f: os.path.getmtime(f) for f in files_to_watch if os.path.exists(f)}
     already_slept = False
@@ -104,7 +120,7 @@ def main():
         if is_sleep_time():
             if not already_slept:
                 print(f"\n🌙 MODO SUEÑO ({datetime.now().strftime('%H:%M')})")
-                for sym in PARES_ACTIVOS:
+                for sym in pares_activos:
                     bots[sym]['brain'].nightly_retrain()
                 already_slept = True
                 print(f"⏳ Durmiendo hasta las {sleep_end.strftime('%H:%M')}...")
@@ -115,7 +131,6 @@ def main():
             print(f"\n☀️ DESPERTANDO FLOTA")
             already_slept = False
 
-        # A. Hot-Reload (Global)
         has_updates, last_mod_times = check_for_updates(last_mod_times)
         if has_updates:
             print("\n💡 Actualización detectada — recargando módulos base...")
@@ -124,29 +139,44 @@ def main():
             importlib.reload(tracker)
             importlib.reload(data_engine)
             logger.info("⚙️ Configuración actualizada desde el Dashboard")
-            
-            for sym in PARES_ACTIVOS:
-                memoria = bots[sym]['tr'].active_trades
-                bots[sym]['rm'] = risk_manager.RiskManager()
-                bots[sym]['tr'] = tracker.TradeTracker(symbol=sym) # Recarga con símbolo
-                bots[sym]['tr'].active_trades = memoria
-                bots[sym]['tr'].set_on_close_callback(make_callback(sym))
-                bots[sym]['engine'] = data_engine.DataEngine()
+
+            # Actualizar pares por si cambiaron en config
+            pares_activos = config.PARES_ACTIVOS
+
+            for sym in pares_activos:
+                if sym not in bots:
+                    # Nuevo par añadido en caliente
+                    bots[sym] = {
+                        'engine': data_engine.DataEngine(),
+                        'brain': MirageBrain(symbol=sym),
+                        'rm': risk_manager.RiskManager(),
+                        'tr': tracker.TradeTracker(symbol=sym),
+                        'cooldown_left': 0,
+                        'consecutive_errors': 0,
+                        'last_features': None,
+                    }
+                else:
+                    memoria = bots[sym]['tr'].active_trades
+                    bots[sym]['rm'] = risk_manager.RiskManager()
+                    bots[sym]['tr'] = tracker.TradeTracker(symbol=sym)
+                    bots[sym]['tr'].active_trades = memoria
+                    bots[sym]['engine'] = data_engine.DataEngine()
+
+                bots[sym]['tr'].set_on_close_callback(make_callback(sym, bots))
+
             print("✅ Toda la flota actualizada.\n")
 
         if not api.paper_trading:
             account_balance = api.get_balance()
 
-        # Variables para el Dashboard Web
         global_btc_features = None
         web_operaciones_activas = []
         web_pnl_global = 0
         web_trades_global = 0
         web_wins_global = 0
 
-        # ── CICLO DE ANÁLISIS POR MONEDA ─────────────────────────────────────
         print("\n" + "═" * 64)
-        for sym in PARES_ACTIVOS:
+        for sym in pares_activos:
             b = bots[sym]
             try:
                 live_data = api.get_historical_data(sym, config.TIMEFRAME, limit=200)
@@ -159,11 +189,9 @@ def main():
                 last_row = features.iloc[-1].to_dict()
                 atr_current = last_row['ATR']
 
-                # Guardar BTC para correlación de las demás
                 if sym == 'BTCUSDT':
                     global_btc_features = features
 
-                # Trailing stop
                 with b['tr']._trades_lock:
                     trades_to_process = list(b['tr'].active_trades)
 
@@ -178,7 +206,6 @@ def main():
                         t['use_sl'] = True
                         t['is_trailing'] = True
 
-                # Vigilancia
                 trades_before = len(b['tr'].active_trades)
                 b['tr'].update_market_price(current_price)
                 if len(b['tr'].active_trades) < trades_before:
@@ -186,20 +213,17 @@ def main():
                     if consecutive_losses > 0:
                         b['cooldown_left'] = config.COOLDOWN_CANDLES
 
-                # Estadísticas Locales
                 total, wins, losses, wr, pnl = b['tr'].get_dashboard_stats()
                 web_pnl_global += pnl
                 web_trades_global += total
                 web_wins_global += wins
 
                 c_wins, c_losses = b['rm'].get_streak_info()
-                
-                # Imprimir estado en consola por moneda
+
                 print(f"📊 {sym: <8} | {current_price:>10,.2f} USDT | WR: {wr:>4.1f}% | PnL: {pnl:>7.4f}")
                 if b['cooldown_left'] > 0:
                     print(f"   ⏸️  Cooldown: {b['cooldown_left']} vela(s)")
 
-                # Preparar datos flotantes para la web
                 with b['tr']._trades_lock:
                     active_trades_snapshot = list(b['tr'].active_trades)
 
@@ -216,12 +240,10 @@ def main():
                         "is_trailing": t.get('is_trailing', False)
                     })
 
-                # Predicción
                 action_code, confidence, method_name, use_sl = b['brain'].get_consensus_prediction(
                     last_row, features_df=features, btc_features=global_btc_features if sym != 'BTCUSDT' else None
                 )
 
-                # Ejecución
                 can_trade = (
                     action_code is not None
                     and confidence > config.MIN_CONFIDENCE
@@ -244,7 +266,7 @@ def main():
                 b['consecutive_errors'] += 1
                 logger.error(f"Error processing {sym}: {e}", exc_info=True)
                 print(f"⚠️ Error en {sym}: {e}")
-        
+
         print("═" * 64)
 
         # ── ACTUALIZAR EL DASHBOARD WEB ──────────────────────────────────────
