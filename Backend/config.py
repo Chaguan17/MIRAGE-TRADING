@@ -13,14 +13,36 @@ API_SECRET = os.getenv('BINANCE_API_SECRET')
 if not API_KEY or not API_SECRET:
     logger.warning("Missing Binance API credentials in .env")
 
-SETTINGS_PATH = "storage/settings.json"
+# --- RUTAS DE ARCHIVOS ---
+STORAGE_DIR          = "storage"
+SETTINGS_PATH        = os.path.join(STORAGE_DIR, "settings.json")
+TRADE_HISTORY_PATH   = os.path.join(STORAGE_DIR, "trade_history.csv")
+DB_PATH              = os.path.join(STORAGE_DIR, "mirage_trading.db")
+BACKUP_DIR           = os.path.join(STORAGE_DIR, "backups")
+LIVE_STATE_PATH      = os.path.join(STORAGE_DIR, "live_state.json")
+METADATA_PATH        = os.path.join(STORAGE_DIR, "parameters_metadata.json")
 
+os.makedirs(STORAGE_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
+# --- CONSTANTES DE SEGURIDAD Y IA ---
 MAX_LEVERAGE_ALLOWED = 125
 DEFAULT_LEVERAGE     = 10
 MIN_TRADES_FOR_AI    = 100
 MAX_BOOTSTRAP_BUFFER = 5
 
+# --- HIPERPARÁMETROS IA ---
+AI_MAX_WEIGHT           = 0.70
+AI_BASE_ESTIMATORS      = 100
+AI_ESTIMATORS_STEP      = 10
+AI_LEARNING_CURVE_STEPS = 45  # Trades adicionales tras el mínimo para llegar al peso máximo
+RANDOM_STATE            = 42
+
+LAYER_WEIGHTS = {
+    'basic':     0.25,
+    'structure': 0.45,
+    'context':   0.30,
+}
 
 def load_dynamic_settings():
     if os.path.exists(SETTINGS_PATH):
@@ -123,7 +145,6 @@ else:
 SYMBOL        = dyn.get('SYMBOL', 'BTCUSDT')
 TIMEFRAME     = dyn.get('TIMEFRAME', '1m')
 
-
 LEVERAGE = clamp_leverage(int(dyn.get('LEVERAGE', DEFAULT_LEVERAGE)))
 
 
@@ -160,6 +181,7 @@ SESSION_WEIGHTS = dyn.get('SESSION_WEIGHTS', {
 
 TRAILING_STOP_ACTIVATION = float(dyn.get('TRAILING_STOP_ACTIVATION', 0.5))
 TRAILING_STOP_DISTANCE   = float(dyn.get('TRAILING_STOP_DISTANCE', 0.3))
+BREAKEVEN_ACTIVATION     = float(dyn.get('BREAKEVEN_ACTIVATION', 0.5))
 
 
 SMC_LOOKBACK          = int(dyn.get('SMC_LOOKBACK', 20))
@@ -184,6 +206,28 @@ SLEEP_START_HOUR   = int(dyn.get('SLEEP_START_HOUR', 22))
 SLEEP_START_MINUTE = int(dyn.get('SLEEP_START_MINUTE', 0))
 SLEEP_END_HOUR     = int(dyn.get('SLEEP_END_HOUR', 8))
 SLEEP_END_MINUTE   = int(dyn.get('SLEEP_END_MINUTE', 0))
+
+
+# --- VETOS DINÁMICOS ---
+GLOBAL_RSI_OB_BASE        = 75.0
+GLOBAL_RSI_OS_BASE        = 25.0
+RSI_VOL_ADJUSTMENT_FACTOR = 20.0  # Cuántos puntos de RSI se ajustan por cada 1% de cambio en ATR_pct
+RSI_VOL_REF               = 0.15  # ATR_pct base de BTC considerado "normal" para 1m/5m
+
+# --- AJUSTE DINÁMICO DE TAKE PROFIT ---
+TP_VOL_ADJUSTMENT_FACTOR  = 5.0   # Factor de ajuste para el TP_MULTIPLIER
+TP_VOL_REF                = 0.15  # Referencia de volatilidad (ATR_pct)
+TP_MIN_MULTIPLIER         = 2.0   # Mínimo absoluto para no cerrar demasiado pronto
+
+# --- ESTRATEGIA MARTINGALA ---
+MARTINGALE_ENABLED    = str(dyn.get('MARTINGALE_ENABLED', 'False')).lower() == 'true'
+MARTINGALE_MULTIPLIER = float(dyn.get('MARTINGALE_MULTIPLIER', 2.0)) # Multiplicador tras pérdida
+MARTINGALE_MAX_STEPS  = int(dyn.get('MARTINGALE_MAX_STEPS', 3))      # Máximo de aumentos
+
+# --- AJUSTE DINÁMICO DE STOP LOSS ---
+SL_VOL_ADJUSTMENT_FACTOR  = 2.0   # Factor de ajuste para el ATR_MULTIPLIER
+SL_VOL_REF                = 0.15  # Referencia de volatilidad (ATR_pct)
+SL_MIN_MULTIPLIER         = 1.2   # Mínimo absoluto para el multiplicador de SL
 
 validate_sleep_config(SLEEP_START_HOUR, SLEEP_START_MINUTE, SLEEP_END_HOUR, SLEEP_END_MINUTE)
 logger.info(f"Sleep schedule configured: {SLEEP_START_HOUR:02d}:{SLEEP_START_MINUTE:02d} → {SLEEP_END_HOUR:02d}:{SLEEP_END_MINUTE:02d} UTC")

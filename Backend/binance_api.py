@@ -37,6 +37,7 @@ class MirageBinance:
         """
         self.paper_trading  = paper_trading
         self._paper_balance = config.PAPER_BALANCE
+        self._used_margin   = 0.0 # Margen ocupado por trades abiertos
 
         key_preview = str(api_key)[:5] if api_key else "NINGUNA"
         print(f"🔑 Llave detectada: {key_preview}...")
@@ -54,6 +55,28 @@ class MirageBinance:
 
         if self.paper_trading:
             print(f"🛡️ MODO PAPER TRADING | Balance simulado: {self._paper_balance} USDT")
+
+    # ── GESTIÓN DE MARGEN SIMULADO ────────────────────────────────
+
+    def get_available_margin(self):
+        """Devuelve el capital 'Cash' disponible para abrir nuevas posiciones."""
+        if not self.paper_trading:
+            balance = self.client.fetch_balance()
+            return float(balance.get('USDT', {}).get('free', 0))
+        # En paper: Balance Total - Margen Ocupado
+        return max(0, self._paper_balance - self._used_margin)
+
+    def occupy_margin(self, amount):
+        if self.paper_trading:
+            self._used_margin += amount
+
+    def release_margin(self, amount):
+        if self.paper_trading:
+            self._used_margin = max(0, self._used_margin - amount)
+
+    def update_paper_equity(self, pnl):
+        if self.paper_trading:
+            self._paper_balance += pnl
 
     # ── CONEXIÓN ──────────────────────────────────────────────────
 

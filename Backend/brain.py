@@ -1,10 +1,12 @@
 import os
 import joblib
 import pandas as pd
+import sqlite3
 import numpy as np
 import logging
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
+import config as cfg
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import precision_score, recall_score, f1_score
 from methods import (
@@ -18,39 +20,29 @@ logger = logging.getLogger(__name__)
 
 class MirageBrain:
 
-    # BUG CRÍTICO CORREGIDO #1:
-    # MIN_TRADES_FOR_AI estaba hardcodeado a 20 aquí pero config.MIN_TRADES_FOR_AI = 100.
-    # El test test_min_trades_for_ai_respeta_config fallaba porque brain.MIN_TRADES_FOR_AI
-    # nunca se leía de config. Ahora se asigna en __init__ desde config.
-    MAX_AI_WEIGHT     = 0.70
-    BASE_ESTIMATORS   = 100
-    ESTIMATORS_STEP   = 10
-
-    LAYER_WEIGHTS = {
-        'basic':     0.25,
-        'structure': 0.45,
-        'context':   0.30,
-    }
-
     def __init__(self, symbol="BTCUSDT"):
-        import config as cfg
         self.symbol = symbol
 
-        # FIX #1: leer MIN_TRADES_FOR_AI desde config para que coincida
-        # con lo que valida el test y con la intención del proyecto.
-        self.MIN_TRADES_FOR_AI = cfg.MIN_TRADES_FOR_AI
+        self.cfg = cfg
+        self.MIN_TRADES_FOR_AI = self.cfg.MIN_TRADES_FOR_AI
+        self.MAX_AI_WEIGHT     = self.cfg.AI_MAX_WEIGHT
+        self.BASE_ESTIMATORS   = self.cfg.AI_BASE_ESTIMATORS
+        self.ESTIMATORS_STEP   = self.cfg.AI_ESTIMATORS_STEP
+        self.LAYER_WEIGHTS     = self.cfg.LAYER_WEIGHTS
+        self.RSI_OB_BASE       = self.cfg.GLOBAL_RSI_OB_BASE
+        self.RSI_OS_BASE       = self.cfg.GLOBAL_RSI_OS_BASE
+        self.RSI_VOL_ADJ       = self.cfg.RSI_VOL_ADJUSTMENT_FACTOR
+        self.RSI_VOL_REF       = self.cfg.RSI_VOL_REF
 
-        self.outcome_path = f'storage/model_outcome_{self.symbol}.pkl'
-        self.sl_path      = f'storage/model_sl_{self.symbol}.pkl'
-        self.scaler_path  = f'storage/scaler_{self.symbol}.pkl'
+        self.outcome_path = os.path.join(self.cfg.STORAGE_DIR, f'model_outcome_{self.symbol}.pkl')
+        self.sl_path      = os.path.join(self.cfg.STORAGE_DIR, f'model_sl_{self.symbol}.pkl')
+        self.scaler_path  = os.path.join(self.cfg.STORAGE_DIR, f'scaler_{self.symbol}.pkl')
 
         self.model_outcome     = self._load_or_create(self.outcome_path)
         self.model_sl          = self._load_or_create(self.sl_path)
         self.scaler            = self._load_scaler()
         self.trades_seen       = self._count_historical_trades()
 
-        # FIX #2: el buffer se usará con un límite máximo (MAX_BOOTSTRAP_BUFFER
-        # de config) para no acumular trades indefinidamente en memoria.
         self._bootstrap_buffer = []
         self._max_buffer       = cfg.MAX_BOOTSTRAP_BUFFER
 
@@ -64,7 +56,7 @@ class MirageBrain:
         print(f"🧠 Modelo nuevo para {self.symbol} — Modo Experto Técnico.")
         return RandomForestClassifier(
             n_estimators=self.BASE_ESTIMATORS,
-            random_state=42,
+            random_state=self.cfg.RANDOM_STATE,
             warm_start=True,
         )
 
@@ -82,15 +74,12 @@ class MirageBrain:
             int: Número de trades del par. 0 si el CSV no existe o está vacío.
         """
         try:
-            if os.path.exists('storage/trade_history.csv'):
-                df = pd.read_csv('storage/trade_history.csv')
-                if 'pair' in df.columns:
-                    return len(df[df['pair'] == self.symbol])
-                return len(df)
-        except FileNotFoundError:
-            logger.info(f"trade_history.csv not found for {self.symbol}")
-        except pd.errors.EmptyDataError:
-            logger.warning(f"trade_history.csv is empty for {self.symbol}")
+            if os.path.exists(self.cfg.DB_PATH):
+                conn = sqlite3.connect(self.cfg.DB_PATH)
+                query = "SELECT COUNT(*) FROM trades WHERE pair = ?"
+                res = conn.execute(query, (self.symbol,)).fetchone()
+                conn.close()
+                return res[0] if res else 0
         except Exception as e:
             logger.error(f"Error counting historical trades for {self.symbol}: {e}")
         return 0
@@ -105,7 +94,6 @@ class MirageBrain:
                 - europa  (08-16 UTC): 1.00
                 - america (16-24 UTC): 1.10
         """
-        import config
         from datetime import datetime, timezone
         hour_utc = datetime.now(timezone.utc).hour
         if 0 <= hour_utc < 8:
@@ -114,7 +102,7 @@ class MirageBrain:
             session = 'europa'
         else:
             session = 'america'
-        return config.SESSION_WEIGHTS.get(session, 1.0), session
+        return self.cfg.SESSION_WEIGHTS.get(session, 1.0), session
 
     def get_session_info(self):
         """
@@ -208,7 +196,6 @@ class MirageBrain:
                 - method_name (estrategia dominante)
                 - use_sl      (True si el modelo SL recomienda usarlo)
         """
-        import config
         X  = self._build_X(features_dict)
         df = features_df if features_df is not None else pd.DataFrame([features_dict])
 
@@ -235,10 +222,40 @@ class MirageBrain:
         if tech_action is None:
             return None, 0, 'None', True
 
+        # --- Veto de BTC (Tendencia de mercado global) ---
+        if self.symbol != "BTCUSDT" and btc_features is not None:
+            btc_action, _ = context_signals.get('btc_corr', (None, 0))
+            if tech_action != btc_action:
+                logger.info(f"🚫 BTC VETO en {self.symbol}: Desalineado con la tendencia global.")
+                return None, 0, 'BTC Trend Veto', True
+
+        # --- Veto de RSI Global Dinámico (Ajustado por Volatilidad) ---
+        if btc_features is not None and 'RSI' in btc_features.columns and 'ATR_pct' in btc_features.columns:
+            btc_rsi = btc_features.iloc[-1]['RSI']
+            btc_vol = btc_features.iloc[-1]['ATR_pct']
+            if not pd.isna(btc_rsi) and not pd.isna(btc_vol):
+                vol_diff = btc_vol - self.RSI_VOL_REF
+                adjustment = vol_diff * self.RSI_VOL_ADJ
+                dyn_ob = max(65, min(85, self.RSI_OB_BASE - adjustment))
+                dyn_os = max(15, min(35, self.RSI_OS_BASE + adjustment))
+
+                if tech_action == 1 and btc_rsi >= dyn_ob:
+                    return None, 0, 'RSI Overbought Veto', True
+                elif tech_action == 0 and btc_rsi <= dyn_os:
+                    return None, 0, 'RSI Oversold Veto', True
+
         ai_weight   = self._ai_weight()
         tech_weight = 1.0 - ai_weight
         ai_conf     = self._predict_outcome(X, tech_action)
         confidence  = (tech_conf * tech_weight) + (ai_conf * ai_weight)
+
+        # --- MEJORA: Veto de IA (Contradicción detectada por el modelo) ---
+        # Si la IA tiene experiencia (peso > 0.1) y estima una probabilidad de éxito
+        # baja (< 40%), cancelamos la señal técnica por seguridad.
+        if ai_weight > 0.1 and ai_conf < 0.40:
+            logger.info(f"🧠 IA VETO en {self.symbol}: Probabilidad de éxito baja ({ai_conf:.1%})")
+            return None, 0, 'AI Veto', True
+        # -----------------------------------------------------------------
 
         session_weight, _ = self._get_session_weight()
         confidence *= session_weight
@@ -260,6 +277,14 @@ class MirageBrain:
                         best_conf, best_method = conf, name
             if votes[1] == 0 and votes[0] == 0:
                 return None, 0, 'None'
+
+            # --- MEJORA: Detección de conflicto interno en la capa ---
+            # Si las señales opuestas en una capa son muy similares, hay indecisión.
+            v_max = max(votes[1], votes[0])
+            v_min = min(votes[1], votes[0])
+            if v_min > 0 and (v_min / v_max) > 0.7:
+                return None, 0, 'Layer Conflict'
+
             winner = max(votes, key=votes.get)
             total  = votes[1] + votes[0] + 1e-9
             return winner, votes[winner] / total, best_method
@@ -281,6 +306,12 @@ class MirageBrain:
         if final_votes[1] == 0 and final_votes[0] == 0:
             return None, 0, 'None'
 
+        # --- MEJORA: Detección de conflicto global entre capas ---
+        v_max = max(final_votes[1], final_votes[0])
+        v_min = min(final_votes[1], final_votes[0])
+        if v_min > 0 and (v_min / v_max) > 0.8:
+            return None, 0, 'Global Consensus Conflict'
+
         winner      = max(final_votes, key=final_votes.get)
         total       = final_votes[1] + final_votes[0] + 1e-9
         final_conf  = final_votes[winner] / total
@@ -297,7 +328,8 @@ class MirageBrain:
         """
         if self.trades_seen < self.MIN_TRADES_FOR_AI:
             return 0.0
-        ratio = min(1.0, (self.trades_seen - self.MIN_TRADES_FOR_AI) / 45)
+        steps = getattr(self.cfg, 'AI_LEARNING_CURVE_STEPS', 45)
+        ratio = min(1.0, (self.trades_seen - self.MIN_TRADES_FOR_AI) / steps)
         return ratio * self.MAX_AI_WEIGHT
 
     def _predict_outcome(self, X, action_code):
@@ -339,11 +371,6 @@ class MirageBrain:
     def online_update(self, features_dict, result_label, sl_was_used, sl_was_hit):
         """
         Actualiza los modelos con el resultado del trade recién cerrado.
-
-        BUG CRÍTICO CORREGIDO #2:
-        El buffer _bootstrap_buffer nunca se vaciaba, acumulando todos los trades
-        en memoria indefinidamente. MAX_BOOTSTRAP_BUFFER de config nunca se usaba.
-        Ahora el buffer se vacía tras el fit y tiene tamaño máximo.
 
         Args:
             features_dict (dict): Features que había en el momento de la entrada.
@@ -406,19 +433,20 @@ class MirageBrain:
         except Exception as e:
             print(f"⚠️ online_update error en {self.symbol}: {e}")
 
-    def nightly_retrain(self, history_path='storage/trade_history.csv'):
+    def nightly_retrain(self):
         """
         Reentrenamiento completo con todos los trades históricos del CSV.
         """
         print(f"\n{'🌙'*4} {self.symbol} SUEÑO: Reentrenando {'🌙'*4}")
         try:
-            if not os.path.exists(history_path):
+            if not os.path.exists(self.cfg.DB_PATH):
                 print(f"CEREBRO {self.symbol}: Sin historial todavía.")
                 return
 
-            df = pd.read_csv(history_path)
-            if 'pair' in df.columns:
-                df = df[df['pair'] == self.symbol]
+            conn = sqlite3.connect(self.cfg.DB_PATH)
+            query = f"SELECT * FROM trades WHERE pair = '{self.symbol}'"
+            df = pd.read_sql(query, conn)
+            conn.close()
 
             if len(df) < self.MIN_TRADES_FOR_AI:
                 print(f"CEREBRO {self.symbol}: {len(df)}/{self.MIN_TRADES_FOR_AI} trades mínimos.")
@@ -435,7 +463,7 @@ class MirageBrain:
 
             self.model_outcome = RandomForestClassifier(
                 n_estimators=self.BASE_ESTIMATORS,
-                random_state=42,
+                random_state=self.cfg.RANDOM_STATE,
                 warm_start=True,
                 class_weight=w,
             )
@@ -451,7 +479,7 @@ class MirageBrain:
                     w_sl  = self._compute_weights(y_sl)
                     self.model_sl = RandomForestClassifier(
                         n_estimators=self.BASE_ESTIMATORS,
-                        random_state=42,
+                        random_state=self.cfg.RANDOM_STATE,
                         warm_start=True,
                         class_weight=w_sl,
                     )
@@ -507,6 +535,6 @@ class MirageBrain:
 
     def _save_all(self):
         """Persiste ambos modelos en disco (storage/)."""
-        os.makedirs('storage', exist_ok=True)
+        os.makedirs(self.cfg.STORAGE_DIR, exist_ok=True)
         joblib.dump(self.model_outcome, self.outcome_path)
         joblib.dump(self.model_sl,      self.sl_path)
