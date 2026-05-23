@@ -25,25 +25,6 @@ METADATA_PATH        = os.path.join(STORAGE_DIR, "parameters_metadata.json")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- CONSTANTES DE SEGURIDAD Y IA ---
-MAX_LEVERAGE_ALLOWED = 125
-DEFAULT_LEVERAGE     = 10
-MIN_TRADES_FOR_AI    = 100
-MAX_BOOTSTRAP_BUFFER = 5
-
-# --- HIPERPARÁMETROS IA ---
-AI_MAX_WEIGHT           = 0.70
-AI_BASE_ESTIMATORS      = 100
-AI_ESTIMATORS_STEP      = 10
-AI_LEARNING_CURVE_STEPS = 45  # Trades adicionales tras el mínimo para llegar al peso máximo
-RANDOM_STATE            = 42
-
-LAYER_WEIGHTS = {
-    'basic':     0.25,
-    'structure': 0.45,
-    'context':   0.30,
-}
-
 def load_dynamic_settings():
     if os.path.exists(SETTINGS_PATH):
         try:
@@ -54,6 +35,23 @@ def load_dynamic_settings():
         except Exception as e:
             logger.error(f"Error loading settings from {SETTINGS_PATH}: {e}")
     return {}
+
+dyn = load_dynamic_settings()
+
+# --- CONSTANTES DE SEGURIDAD Y IA ---
+MAX_LEVERAGE_ALLOWED = int(dyn.get("MAX_LEVERAGE_ALLOWED", 125))
+DEFAULT_LEVERAGE     = int(dyn.get("DEFAULT_LEVERAGE", 10))
+MIN_TRADES_FOR_AI    = int(dyn.get("MIN_TRADES_FOR_AI", 100))
+MAX_BOOTSTRAP_BUFFER = int(dyn.get("MAX_BOOTSTRAP_BUFFER", 5))
+
+# --- HIPERPARÁMETROS IA ---
+AI_MAX_WEIGHT           = float(dyn.get("AI_MAX_WEIGHT", 0.70))
+AI_BASE_ESTIMATORS      = int(dyn.get("AI_BASE_ESTIMATORS", 100))
+AI_ESTIMATORS_STEP      = int(dyn.get("AI_ESTIMATORS_STEP", 10))
+AI_LEARNING_CURVE_STEPS = int(dyn.get("AI_LEARNING_CURVE_STEPS", 45))
+RANDOM_STATE            = int(dyn.get("RANDOM_STATE", 42))
+
+LAYER_WEIGHTS = dyn.get("LAYER_WEIGHTS", {"basic": 0.25, "structure": 0.45, "context": 0.30})
 
 
 def validate_sleep_config(start_hour, start_minute, end_hour, end_minute):
@@ -126,9 +124,6 @@ def clamp_leverage(requested: int) -> int:
     return requested
 
 
-dyn = load_dynamic_settings()
-
-
 # --- VALIDACIÓN DEFENSIVA PARA PARES_ACTIVOS ---
 _raw_pares = dyn.get('PARES_ACTIVOS', ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'])
 
@@ -140,6 +135,10 @@ elif isinstance(_raw_pares, str):
 else:
     logger.error(f"PARES_ACTIVOS en settings.json es inválido (tipo {type(_raw_pares).__name__}). Forzando pares por defecto.")
     PARES_ACTIVOS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+
+# --- PRESETS PARA LA UI ---
+PRESET_PAIRS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'LINKUSDT']
+PRESET_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d']
 # -----------------------------------------------
 
 SYMBOL        = dyn.get('SYMBOL', 'BTCUSDT')
@@ -159,7 +158,7 @@ MIN_SIZE_USDT  = float(dyn.get('MIN_SIZE_USDT', 0.0))
 
 ATR_MULTIPLIER = float(dyn.get('ATR_MULTIPLIER', 2.0))
 TP_MULTIPLIER  = float(dyn.get('TP_MULTIPLIER', 4.0))
-MIN_CONFIDENCE = float(dyn.get('MIN_CONFIDENCE', 0.65))
+MIN_CONFIDENCE = float(dyn.get('MIN_CONFIDENCE', 0.55))
 
 
 MAX_CONSECUTIVE_LOSSES = int(dyn.get('MAX_CONSECUTIVE_LOSSES', 3))
@@ -209,25 +208,25 @@ SLEEP_END_MINUTE   = int(dyn.get('SLEEP_END_MINUTE', 0))
 
 
 # --- VETOS DINÁMICOS ---
-GLOBAL_RSI_OB_BASE        = 75.0
-GLOBAL_RSI_OS_BASE        = 25.0
-RSI_VOL_ADJUSTMENT_FACTOR = 20.0  # Cuántos puntos de RSI se ajustan por cada 1% de cambio en ATR_pct
-RSI_VOL_REF               = 0.15  # ATR_pct base de BTC considerado "normal" para 1m/5m
+GLOBAL_RSI_OB_BASE        = float(dyn.get("GLOBAL_RSI_OB_BASE", 75.0))
+GLOBAL_RSI_OS_BASE        = float(dyn.get("GLOBAL_RSI_OS_BASE", 25.0))
+RSI_VOL_ADJUSTMENT_FACTOR = float(dyn.get("RSI_VOL_ADJUSTMENT_FACTOR", 20.0))
+RSI_VOL_REF               = float(dyn.get("RSI_VOL_REF", 0.15))
 
 # --- AJUSTE DINÁMICO DE TAKE PROFIT ---
-TP_VOL_ADJUSTMENT_FACTOR  = 5.0   # Factor de ajuste para el TP_MULTIPLIER
-TP_VOL_REF                = 0.15  # Referencia de volatilidad (ATR_pct)
-TP_MIN_MULTIPLIER         = 2.0   # Mínimo absoluto para no cerrar demasiado pronto
+TP_VOL_ADJUSTMENT_FACTOR  = float(dyn.get("TP_VOL_ADJUSTMENT_FACTOR", 5.0))
+TP_VOL_REF                = float(dyn.get("TP_VOL_REF", 0.15))
+TP_MIN_MULTIPLIER         = float(dyn.get("TP_MIN_MULTIPLIER", 2.0))
 
 # --- ESTRATEGIA MARTINGALA ---
-MARTINGALE_ENABLED    = str(dyn.get('MARTINGALE_ENABLED', 'False')).lower() == 'true'
-MARTINGALE_MULTIPLIER = float(dyn.get('MARTINGALE_MULTIPLIER', 2.0)) # Multiplicador tras pérdida
-MARTINGALE_MAX_STEPS  = int(dyn.get('MARTINGALE_MAX_STEPS', 3))      # Máximo de aumentos
+MARTINGALE_ENABLED    = str(dyn.get("MARTINGALE_ENABLED", "False")).lower() == "true"
+MARTINGALE_MULTIPLIER = float(dyn.get("MARTINGALE_MULTIPLIER", 2.0))
+MARTINGALE_MAX_STEPS  = int(dyn.get("MARTINGALE_MAX_STEPS", 3))
 
 # --- AJUSTE DINÁMICO DE STOP LOSS ---
-SL_VOL_ADJUSTMENT_FACTOR  = 2.0   # Factor de ajuste para el ATR_MULTIPLIER
-SL_VOL_REF                = 0.15  # Referencia de volatilidad (ATR_pct)
-SL_MIN_MULTIPLIER         = 1.2   # Mínimo absoluto para el multiplicador de SL
+SL_VOL_ADJUSTMENT_FACTOR  = float(dyn.get("SL_VOL_ADJUSTMENT_FACTOR", 2.0))
+SL_VOL_REF                = float(dyn.get("SL_VOL_REF", 0.15))
+SL_MIN_MULTIPLIER         = float(dyn.get("SL_MIN_MULTIPLIER", 1.2))
 
 validate_sleep_config(SLEEP_START_HOUR, SLEEP_START_MINUTE, SLEEP_END_HOUR, SLEEP_END_MINUTE)
 logger.info(f"Sleep schedule configured: {SLEEP_START_HOUR:02d}:{SLEEP_START_MINUTE:02d} → {SLEEP_END_HOUR:02d}:{SLEEP_END_MINUTE:02d} UTC")

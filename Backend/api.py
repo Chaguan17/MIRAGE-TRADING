@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import logging
+import importlib
 import config as cfg
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ def read_root():
 @app.get("/api/dashboard")
 def get_dashboard_data():
     try:
+        # Sinergia: Recargamos el módulo config para que el Dashboard 
+        # siempre muestre los valores reales actuales (ej. pares activos)
+        importlib.reload(cfg)
+        
         try:
             with open(cfg.LIVE_STATE_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -49,13 +54,14 @@ def get_dashboard_data():
             }
 
         # Sinergia: Enviamos los pares activos actuales para que el frontend ajuste sus WebSockets
-        data["pares_activos"] = cfg.PARES_ACTIVOS
+        # Normalización: Eliminamos espacios y forzamos mayúsculas para evitar fallos de coincidencia visual
+        data["pares_activos"] = [str(p).strip().upper() for p in getattr(cfg, "PARES_ACTIVOS", [])]
 
         # Cambio de fuente: Leer desde SQLite en lugar de CSV
         if os.path.exists(cfg.DB_PATH):
             try:
                 conn = sqlite3.connect(cfg.DB_PATH)
-                # Filtramos UNKNOWN directamente en el query para mayor eficiencia
+                # Filtramos UNKNOWN y limitamos para no saturar el JSON si el historial crece mucho
                 query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' ORDER BY timestamp ASC"
                 df = pd.read_sql(query, conn)
                 conn.close()

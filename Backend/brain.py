@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 
 class MirageBrain:
 
-    def __init__(self, symbol="BTCUSDT"):
+    def __init__(self, symbol="BTCUSDT", storage_dir=None):
         self.symbol = symbol
 
         self.cfg = cfg
+        self.storage_dir = storage_dir or self.cfg.STORAGE_DIR
         self.MIN_TRADES_FOR_AI = self.cfg.MIN_TRADES_FOR_AI
         self.MAX_AI_WEIGHT     = self.cfg.AI_MAX_WEIGHT
         self.BASE_ESTIMATORS   = self.cfg.AI_BASE_ESTIMATORS
@@ -34,9 +35,9 @@ class MirageBrain:
         self.RSI_VOL_ADJ       = self.cfg.RSI_VOL_ADJUSTMENT_FACTOR
         self.RSI_VOL_REF       = self.cfg.RSI_VOL_REF
 
-        self.outcome_path = os.path.join(self.cfg.STORAGE_DIR, f'model_outcome_{self.symbol}.pkl')
-        self.sl_path      = os.path.join(self.cfg.STORAGE_DIR, f'model_sl_{self.symbol}.pkl')
-        self.scaler_path  = os.path.join(self.cfg.STORAGE_DIR, f'scaler_{self.symbol}.pkl')
+        self.outcome_path = os.path.join(self.storage_dir, f'model_outcome_{self.symbol}.pkl')
+        self.sl_path      = os.path.join(self.storage_dir, f'model_sl_{self.symbol}.pkl')
+        self.scaler_path  = os.path.join(self.storage_dir, f'scaler_{self.symbol}.pkl')
 
         self.model_outcome     = self._load_or_create(self.outcome_path)
         self.model_sl          = self._load_or_create(self.sl_path)
@@ -252,7 +253,7 @@ class MirageBrain:
         # --- MEJORA: Veto de IA (Contradicción detectada por el modelo) ---
         # Si la IA tiene experiencia (peso > 0.1) y estima una probabilidad de éxito
         # baja (< 40%), cancelamos la señal técnica por seguridad.
-        if ai_weight > 0.1 and ai_conf < 0.40:
+        if ai_weight > 0.1 and ai_conf < 0.40 and hasattr(self.model_outcome, 'classes_'):
             logger.info(f"🧠 IA VETO en {self.symbol}: Probabilidad de éxito baja ({ai_conf:.1%})")
             return None, 0, 'AI Veto', True
         # -----------------------------------------------------------------

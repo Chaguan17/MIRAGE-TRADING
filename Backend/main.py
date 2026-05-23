@@ -76,6 +76,11 @@ def main():
 
     pares_activos = config.PARES_ACTIVOS
 
+    # Sinergia: Motor de contexto para BTC (necesario para vetos de IA incluso si no se opera)
+    btc_context_engine = None
+    if 'BTCUSDT' not in pares_activos:
+        btc_context_engine = data_engine.DataEngine()
+
     bots = {}
     for sym in pares_activos:
         print(f"⚙️ Construyendo motor para {sym}...")
@@ -177,6 +182,15 @@ def main():
         web_pnl_global = 0
         web_trades_global = 0
         web_wins_global = 0
+
+        # --- PASO CRÍTICO: Obtener contexto global de BTC antes que el resto ---
+        if btc_context_engine:
+            btc_raw = api.get_historical_data('BTCUSDT', config.TIMEFRAME, limit=200)
+            if btc_raw is not None:
+                global_btc_features = btc_context_engine.prepare_features(btc_raw)
+        elif 'BTCUSDT' in bots:
+            # Si BTC está en la flota, se procesará dentro del loop y llenará global_btc_features
+            pass
 
         print("\n" + "═" * 64)
         for sym in pares_activos:
