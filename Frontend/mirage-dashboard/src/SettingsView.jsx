@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
+const PAIR_PRESETS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "LINKUSDT"];
+const TIMEFRAME_PRESETS = ["1m", "5m", "15m", "1h", "4h", "1d"];
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
@@ -9,16 +12,20 @@ const TAB_INFO = {
   general:         { label: "Cuenta",              icon: "🏦" },
   market:          { label: "Mercado",             icon: "📊" },
   risk:            { label: "Riesgo",              icon: "🛡️" },
-  risk_management: { label: "Riesgo",              icon: "🛡️" },
-  execution:       { label: "Ejecución (SL/TP)",   icon: "⚡" },
+  risk_management: { label: "Gestión Riesgo",      icon: "⚖️" },
+  execution:       { label: "Ejecución SL/TP",     icon: "⚡" },
   strategy:        { label: "Motor IA",            icon: "🧠" },
+  analysis:        { label: "Análisis Técnico",    icon: "🔍" },
+  scheduling:      { label: "Ciclo Sueño",         icon: "⏰" },
+  vetos:           { label: "Vetos Dinámicos",     icon: "🚫" },
+  connection:      { label: "Conexión",            icon: "🌐" },
 };
-const TAB_ORDER = ["general", "market", "risk", "risk_management", "execution", "strategy"];
+const TAB_ORDER = ["general", "market", "risk", "risk_management", "execution", "strategy", "analysis", "scheduling", "vetos", "connection"];
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
   root: {
-    backgroundColor: "#060913",  // FIX: antes faltaba, dependía del body
+    backgroundColor: "#060913",
     minHeight: "100vh",
   },
   layout: {
@@ -37,7 +44,7 @@ const S = {
     paddingBottom: "1.5rem",
     borderBottom: "1px solid #1e293b",
     marginBottom: "2rem",
-    flexWrap: "wrap",  // FIX: responsivo
+    flexWrap: "wrap",
     gap: "1rem",
   },
   headerLeft: { display: "flex", flexDirection: "column", gap: "4px" },
@@ -55,7 +62,7 @@ const S = {
     transition: "color 0.2s",
   },
   title: {
-    fontSize: "clamp(1.25rem, 4vw, 1.75rem)",  // FIX: responsivo
+    fontSize: "clamp(1.25rem, 4vw, 1.75rem)",
     fontWeight: "800",
     margin: 0,
     letterSpacing: "-0.5px",
@@ -103,11 +110,10 @@ const S = {
     borderRadius: "20px",
     border: "1px solid #1e293b",
     boxShadow: "0 10px 25px -5px rgba(0,0,0,0.3)",
-    minWidth: 0,  // FIX: evita que el grid se desborde
+    minWidth: 0,
   },
   grid: {
     display: "grid",
-    // FIX: min(100%, 300px) evita desbordamiento en móvil
     gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 300px), 1fr))",
     gap: "2rem",
     alignItems: "start",
@@ -197,6 +203,24 @@ const S = {
     whiteSpace: "nowrap",
     transition: "all 0.2s",
   },
+  presetContainer: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "8px",
+    marginBottom: "12px",
+  },
+  presetBtn: (active) => ({
+    padding: "6px 12px",
+    borderRadius: "8px",
+    fontSize: "0.75rem",
+    fontWeight: "700",
+    cursor: "pointer",
+    border: "1px solid",
+    borderColor: active ? "#aa3bff" : "#334155",
+    background: active ? "rgba(170, 59, 255, 0.15)" : "#121b2e",
+    color: active ? "#aa3bff" : "#94a3b8",
+    transition: "all 0.2s",
+  }),
   inputWrapper: {
     position: "relative",
     display: "flex",
@@ -240,7 +264,7 @@ const S = {
   }),
 };
 
-// ─── GlobalAnimations (FIX: loading-container definido + CSS responsivo) ──────
+// ─── GlobalAnimations ─────────────────────────────────────────────────────────
 const GlobalAnimations = () => (
   <style>{`
     :root { --bg-card: #0b1120; --text-muted: #64748b; }
@@ -256,24 +280,17 @@ const GlobalAnimations = () => (
       border: 4px solid rgba(170, 59, 255, 0.1);
       border-top-color: #aa3bff; border-radius: 50%;
     }
-
-    /* FIX: loading-container nunca estaba definido → loading invisible */
     .loading-container {
       height: 100vh; display: flex; flex-direction: column;
       justify-content: center; align-items: center;
       background-color: #060913;
     }
-
-    /* ── Layout principal responsivo ── */
-    /* FIX: content era "240px 1fr" fijo → se rompía en tablet/móvil */
     .settings-content {
       display: grid;
       grid-template-columns: 220px 1fr;
       gap: 2rem;
       align-items: start;
     }
-
-    /* FIX: sidebar sticky necesita que el padre tenga overflow visible y el hijo height */
     .settings-sidebar {
       display: flex;
       flex-direction: column;
@@ -281,8 +298,6 @@ const GlobalAnimations = () => (
       position: sticky;
       top: 24px;
     }
-
-    /* En tablet: sidebar horizontal scrollable encima del contenido */
     @media (max-width: 860px) {
       .settings-content {
         grid-template-columns: 1fr !important;
@@ -301,10 +316,14 @@ const GlobalAnimations = () => (
         white-space: nowrap;
       }
     }
-
-    /* Hover en inputs */
     input:hover, select:hover { border-color: #475569 !important; }
     input:focus, select:focus { border-color: #aa3bff !important; box-shadow: 0 0 0 3px rgba(170,59,255,0.1); }
+
+    /* FIX: oculta las flechas nativas del input[type=number]
+       que causan saltos de 0.01 cuando el step del metadata es incorrecto */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -327,25 +346,83 @@ const Toast = ({ message, type, onClose }) => {
   );
 };
 
-// ─── ConfigField ──────────────────────────────────────────────────────────────
-// FIX CRÍTICO: los hooks useState/useMemo estaban después de returns condicionales
-// → violación de Rules of Hooks → "Rendered fewer hooks than expected"
-// Solución: todos los hooks van AL INICIO, antes de cualquier return.
-const ConfigField = ({ param, paramKey, config, setConfig }) => {
-  const rawValue    = config[paramKey];
-  const isPercentage = param.unit === "%";
-  const isArray     = param.type === "array" || Array.isArray(rawValue) || paramKey === "PARES_ACTIVOS";
-  const isSelect    = param.type === "select";
-  const isText      = param.type === "text" || param.type === "string";
-  const isNumeric   = !isArray && !isSelect && !isText;
+// ─── NumericStepper: botones +/- personalizados ───────────────────────────────
+// Reemplaza las flechas nativas del navegador (que ignoraban el step correcto)
+// por botones propios que siempre usan computedStep.
+const NumericStepper = ({ value, onChange, step = 1, min, max, style }) => {
+  const numStep = Number(step) || 1;
 
-  // ── Hooks siempre al inicio (sin condición) ──
+  const decrement = () => {
+    const next = parseFloat((Number(value) - numStep).toFixed(10));
+    if (min !== undefined && next < Number(min)) return;
+    onChange(next);
+  };
+
+  const increment = () => {
+    const next = parseFloat((Number(value) + numStep).toFixed(10));
+    if (max !== undefined && next > Number(max)) return;
+    onChange(next);
+  };
+
+  const btnStyle = {
+    background: "rgba(170,59,255,0.10)",
+    border: "1px solid rgba(170,59,255,0.20)",
+    color: "#aa3bff",
+    width: "30px",
+    height: "100%",
+    cursor: "pointer",
+    fontSize: "1rem",
+    fontWeight: "700",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "background 0.15s",
+    flexShrink: 0,
+    userSelect: "none",
+  };
+
+  return (
+    <div style={{ display: "flex", height: "44px", borderRadius: "10px", overflow: "hidden", border: "1px solid #334155", background: "#121b2e", ...style }}>
+      <button type="button" onClick={decrement} style={{ ...btnStyle, borderRight: "1px solid #334155" }}>−</button>
+      <input
+        type="number"
+        value={value ?? ""}
+        readOnly
+        style={{
+          flex: 1,
+          background: "transparent",
+          border: "none",
+          color: "white",
+          textAlign: "center",
+          fontSize: "0.9rem",
+          fontFamily: "JetBrains Mono, monospace",
+          outline: "none",
+          MozAppearance: "textfield",
+          appearance: "textfield",
+          padding: "0 4px",
+        }}
+      />
+      <button type="button" onClick={increment} style={{ ...btnStyle, borderLeft: "1px solid #334155" }}>+</button>
+    </div>
+  );
+};
+
+// ─── ConfigField ──────────────────────────────────────────────────────────────
+const ConfigField = ({ param, paramKey, config, setConfig }) => {
+  const rawValue     = config[paramKey];
+  const isPercentage = param.unit === "%";
+  const isArray      = param.type === "array" || Array.isArray(rawValue) || paramKey === "PARES_ACTIVOS";
+  const isSelect     = param.type === "select";
+  const isText       = param.type === "text" || param.type === "string";
+  const isNumeric    = !isArray && !isSelect && !isText;
+
+  // ── Todos los hooks al inicio (sin condiciones) ────────────────────────────
   const [addPairInput, setAddPairInput] = useState("");
 
   const displayValue = useMemo(() => {
     if (!isNumeric) return rawValue;
-    if (isPercentage && typeof rawValue === "number" && rawValue <= 1.0) {
-      return parseFloat((rawValue * 100).toFixed(2));
+    if (isPercentage && typeof rawValue === "number") {
+      return Number((rawValue * 100).toFixed(2));
     }
     return rawValue;
   }, [rawValue, isPercentage, isNumeric]);
@@ -356,24 +433,91 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
     if (isNumeric) setLocalValue(displayValue);
   }, [displayValue, isNumeric]);
 
+  const toDisplayScale = useCallback((val) => {
+    if (val === undefined || val === null) return undefined;
+    if (!isPercentage) return val;
+    return Number(val) * 100;
+  }, [isPercentage]);
+
+  // FIX PRINCIPAL: calcula el step correcto para este campo.
+  //
+  // Problema original: param.step en el metadata puede ser 0.01 incluso para
+  // campos enteros (n_estimators, leverage, lookback…), lo que hacía que las
+  // flechas nativas del input avanzaran de 5000 a 5000.01 en lugar de 5001.
+  //
+  // Lógica de resolución (en orden de prioridad):
+  //   1. Campos de porcentaje → siempre 0.01 (se muestran multiplicados x100)
+  //   2. param.step >= 1 en el metadata → respetarlo tal cual
+  //   3. El valor actual es un entero → forzar step = 1
+  //   4. Fallback → usar param.step si existe, o "1" si no
+  const computedStep = useMemo(() => {
+    if (isPercentage) return "0.01";
+    const metaStep = Number(param.step);
+    if (param.step !== undefined && param.step !== null && metaStep >= 1) {
+      return String(metaStep);
+    }
+    if (Number.isInteger(Number(rawValue))) return "1";
+    return param.step ? String(param.step) : "1";
+  }, [isPercentage, param.step, rawValue]);
+
+  // Decide si usar el NumericStepper (campos enteros grandes) o el input libre
+  // (campos decimales como porcentajes, multiplicadores, etc.)
+  const useStepperUI = useMemo(() => {
+    if (isPercentage) return false;
+    return Number.isInteger(Number(rawValue)) && Number(computedStep) >= 1;
+  }, [isPercentage, rawValue, computedStep]);
+
+  // ─── Renderizado especial para TIMEFRAME y SYMBOL ─────────────────────────
+  if (paramKey === "TIMEFRAME" || paramKey === "SYMBOL") {
+    const presets = paramKey === "TIMEFRAME" ? TIMEFRAME_PRESETS : PAIR_PRESETS;
+    return (
+      <div style={S.formGroup(false)}>
+        <div>
+          <label style={S.label}>{param.label}</label>
+          <p style={S.desc}>{param.description}</p>
+        </div>
+        <div style={S.presetContainer}>
+          {presets.map((val) => (
+            <button
+              key={val}
+              type="button"
+              onClick={() => setConfig((prev) => ({ ...prev, [paramKey]: val }))}
+              style={S.presetBtn(rawValue === val)}
+            >
+              {val}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Commit para el input numérico libre (decimales / porcentajes) ─────────
   const handleNumericCommit = useCallback(() => {
     if (localValue === "" || localValue === null) return;
     let num = parseFloat(localValue);
     if (isNaN(num)) { setLocalValue(displayValue); return; }
 
-    const minRaw = isPercentage ? param.min * 100 : param.min;
-    const maxRaw = isPercentage ? param.max * 100 : param.max;
-    if (param.min !== undefined && num < minRaw) num = minRaw;
-    if (param.max !== undefined && num > maxRaw) num = maxRaw;
+    // Aplicar clamp con los límites en la escala de pantalla
+    const minRaw = toDisplayScale(param.min);
+    const maxRaw = toDisplayScale(param.max);
+    if (minRaw !== undefined && num < minRaw) num = minRaw;
+    if (maxRaw !== undefined && num > maxRaw) num = maxRaw;
 
-    const finalVal = isPercentage ? parseFloat((num / 100).toFixed(4)) : num;
+    let finalVal;
+    if (isPercentage) {
+      finalVal = Number((num / 100).toFixed(6));
+    } else if (Number(computedStep) >= 1) {
+      finalVal = Math.round(num);
+    } else {
+      finalVal = Number(num.toFixed(8));
+    }
+
     setLocalValue(isPercentage ? num : finalVal);
     setConfig((prev) => ({ ...prev, [paramKey]: finalVal }));
-  }, [localValue, displayValue, isPercentage, param, paramKey, setConfig]);
+  }, [localValue, displayValue, isPercentage, param, paramKey, computedStep, setConfig, toDisplayScale]);
 
-  // ── Render según tipo ──
-
-  // 1. ARRAY — lista de pares activos
+  // ── 1. ARRAY — lista de pares activos ─────────────────────────────────────
   if (isArray) {
     const currentArray = Array.isArray(rawValue) ? rawValue : [];
 
@@ -396,38 +540,41 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
           <label style={S.label}>{param.label || "Pares Activos"}</label>
           <p style={S.desc}>{param.description || "Activos sobre los cuales el algoritmo ejecutará órdenes."}</p>
         </div>
-        <div style={S.tagContainer}>
-          {currentArray.length === 0 && (
-            <span style={{ color: "#334155", fontSize: "0.8rem", padding: "4px" }}>
-              Ningún par seleccionado
-            </span>
-          )}
-          {currentArray.map((pair) => (
-            <button key={pair} type="button" onClick={() => togglePair(pair)} style={S.tag(true)}
-              title="Click para quitar">
-              ✓ {pair}
+        <div style={S.presetContainer}>
+          {PAIR_PRESETS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => togglePair(p)}
+              style={S.presetBtn(currentArray.includes(p))}
+            >
+              {currentArray.includes(p) ? "✓" : "+"} {p}
             </button>
           ))}
         </div>
-        {/* FIX UX: botón explícito "Añadir" en lugar de solo Enter */}
-        <div style={S.addPairRow}>
-          <input
-            type="text"
-            style={S.addPairInput}
-            placeholder="Ej: SOLUSDT"
-            value={addPairInput}
-            onChange={(e) => setAddPairInput(e.target.value.toUpperCase())}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddPair(); } }}
-          />
-          <button type="button" onClick={handleAddPair} style={S.addPairBtn}>
-            + Añadir
-          </button>
-        </div>
+        {/* Pares personalizados (no-preset) que ya están activos */}
+        {currentArray.filter((p) => !PAIR_PRESETS.includes(p)).length > 0 && (
+          <div style={S.presetContainer}>
+            {currentArray
+              .filter((p) => !PAIR_PRESETS.includes(p))
+              .map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => togglePair(p)}
+                  style={S.presetBtn(true)}
+                >
+                  ✓ {p}
+                </button>
+              ))}
+          </div>
+        )}
+        {/* Input para añadir un par personalizado */}
       </div>
     );
   }
 
-  // 2. SELECT
+  // ── 2. SELECT ──────────────────────────────────────────────────────────────
   if (isSelect) {
     return (
       <div style={S.formGroup(false)}>
@@ -448,7 +595,7 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
     );
   }
 
-  // 3. TEXT / STRING
+  // ── 3. TEXT / STRING ───────────────────────────────────────────────────────
   if (isText) {
     return (
       <div style={S.formGroup(false)}>
@@ -466,7 +613,53 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
     );
   }
 
-  // 4. NUMERIC
+  // ── 4. NUMERIC ─────────────────────────────────────────────────────────────
+  //
+  // Dos variantes:
+  //   A) useStepperUI = true  → campos enteros grandes (n_estimators, lookback,
+  //      leverage…): botones −/+ propios para evitar completamente el step
+  //      nativo del navegador.
+  //   B) useStepperUI = false → campos decimales / porcentajes: input libre
+  //      con las flechas nativas ocultadas por CSS (ver GlobalAnimations) y
+  //      commit al perder el foco o pulsar Enter.
+
+  if (useStepperUI) {
+    const stepNum = Number(computedStep) || 1;
+    const minVal  = param.min !== undefined ? Number(param.min) : undefined;
+    const maxVal  = param.max !== undefined ? Number(param.max) : undefined;
+
+    const handleStepperChange = (newVal) => {
+      let clamped = newVal;
+      if (minVal !== undefined && clamped < minVal) clamped = minVal;
+      if (maxVal !== undefined && clamped > maxVal) clamped = maxVal;
+      clamped = Math.round(clamped); // siempre entero en este modo
+      setLocalValue(clamped);
+      setConfig((prev) => ({ ...prev, [paramKey]: clamped }));
+    };
+
+    return (
+      <div style={S.formGroup(false)}>
+        <div>
+          <label style={S.label}>{param.label}</label>
+          <p style={S.desc}>{param.description}</p>
+        </div>
+        <NumericStepper
+          value={localValue ?? ""}
+          step={stepNum}
+          min={minVal}
+          max={maxVal}
+          onChange={handleStepperChange}
+        />
+        {param.min !== undefined && param.max !== undefined && (
+          <span style={{ fontSize: "0.72rem", color: "#334155" }}>
+            Rango: {param.min} – {param.max}{param.unit ? ` ${param.unit}` : ""}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  // Variante B: input libre (decimales / porcentajes)
   return (
     <div style={S.formGroup(false)}>
       <div>
@@ -476,9 +669,9 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
       <div style={S.inputWrapper}>
         <input
           type="number"
-          step={isPercentage ? "0.01" : param.step || "1"}
-          min={isPercentage && param.min !== undefined ? param.min * 100 : param.min}
-          max={isPercentage && param.max !== undefined ? param.max * 100 : param.max}
+          step={computedStep}
+          min={toDisplayScale(param.min)}
+          max={toDisplayScale(param.max)}
           style={{ ...S.input, paddingRight: param.unit ? "3rem" : "16px" }}
           value={localValue ?? ""}
           onChange={(e) => setLocalValue(e.target.value)}
@@ -489,7 +682,7 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
       </div>
       {param.min !== undefined && param.max !== undefined && (
         <span style={{ fontSize: "0.72rem", color: "#334155" }}>
-          Rango: {isPercentage ? param.min * 100 : param.min} – {isPercentage ? param.max * 100 : param.max}{param.unit || ""}
+          Rango: {toDisplayScale(param.min)} – {toDisplayScale(param.max)}{param.unit || ""}
         </span>
       )}
     </div>
@@ -502,10 +695,10 @@ export default function SettingsView() {
   const [activeTab,           setActiveTab]           = useState(null);
   const [isSaving,            setIsSaving]            = useState(false);
   const [config,              setConfig]              = useState({});
-  const [originalConfig,      setOriginalConfig]      = useState({});  // para detectar cambios
+  const [originalConfig,      setOriginalConfig]      = useState({});
   const [parametersMetadata,  setParametersMetadata]  = useState({});
   const [loading,             setLoading]             = useState(true);
-  const [toast,               setToast]               = useState(null); // { message, type }
+  const [toast,               setToast]               = useState(null);
 
   const hasUnsavedChanges = useMemo(
     () => JSON.stringify(config) !== JSON.stringify(originalConfig),
@@ -524,7 +717,7 @@ export default function SettingsView() {
 
         setParametersMetadata(metadata);
         setConfig(configData || {});
-        setOriginalConfig(configData || {});  // guardar copia base
+        setOriginalConfig(configData || {});
 
         const firstTab = Object.values(metadata)[0]?.tab?.toLowerCase() || "general";
         setActiveTab(firstTab);
@@ -547,7 +740,6 @@ export default function SettingsView() {
       if (!res.ok) throw new Error("Server error");
       setOriginalConfig({ ...config });
       setToast({ message: "Configuración guardada correctamente.", type: "success" });
-      // Pequeña pausa para que el usuario vea el toast antes de navegar
       setTimeout(() => navigate("/"), 1400);
     } catch (_) {
       setToast({ message: "Error al guardar la configuración.", type: "error" });
@@ -565,7 +757,6 @@ export default function SettingsView() {
     );
   }, [parametersMetadata]);
 
-  // Cuenta parámetros por tab para el badge
   const tabCounts = useMemo(() => {
     const counts = {};
     Object.values(parametersMetadata).forEach((p) => {
@@ -602,7 +793,6 @@ export default function SettingsView() {
             <h2 style={S.title}>Configuración Mirage</h2>
           </div>
           <div style={S.headerActions}>
-            {/* Indicador de cambios sin guardar */}
             {hasUnsavedChanges && (
               <span style={S.unsavedBadge}>● Cambios sin guardar</span>
             )}
@@ -629,7 +819,6 @@ export default function SettingsView() {
         </header>
 
         {/* ── Content: Sidebar + Card ── */}
-        {/* FIX: clase CSS maneja la responsividad; en móvil: tabs horizontales */}
         <div className="settings-content">
 
           {/* Sidebar / tab bar */}
@@ -666,7 +855,6 @@ export default function SettingsView() {
                     <span style={{ fontSize: "15px" }}>{info?.icon || "⚙️"}</span>
                     {info?.label || tab.charAt(0).toUpperCase() + tab.slice(1)}
                   </span>
-                  {/* Contador de parámetros por tab */}
                   <span style={{
                     fontSize: "0.65rem",
                     fontWeight: "800",

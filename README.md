@@ -275,6 +275,9 @@ MIN_CONFIDENCE: 75% (más selectivo)
 3. **Limitar LEVERAGE a 3x máximo**
    - Seguridad
 
+4. **Mantener BTCUSDT en la flota**
+   - El cerebro utiliza BTC como ancla de correlación. Aunque no se opere, se recomienda que esté en `PARES_ACTIVOS` para activar los vetos de seguridad globales.
+
 4. **Implementar database (SQLite/PostgreSQL)**
    - Para track de 1000+ operaciones
 

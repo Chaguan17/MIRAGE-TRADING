@@ -162,6 +162,8 @@ class TradeTracker:
         try:
             conn.execute(query, list(row.values()))
             conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"❌ Error crítico guardando trade en DB ({self.symbol}): {e}")
         finally:
             conn.close()
 
