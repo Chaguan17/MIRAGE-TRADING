@@ -179,72 +179,72 @@ export default function PerformanceView() {
         </div>
       </div>
 
-      <div className="performance-grid" style={{ marginTop: "20px" }}>
-        <div className="card performance-card">
-            <h4 className="kpi-card-label">WIN RATE</h4>
-            <div className="performance-value">{stats.winRate}%</div>
-        </div>
-        <div className="card performance-card">
-            <h4 className="kpi-card-label">AVG WIN / LOSS</h4>
-            <div className="performance-value text-success">+{stats.avgWin} <span style={{fontSize: "12px", color: "var(--text-muted)"}}>/</span> <span className="text-danger">-{stats.avgLoss}</span></div>
-        </div>
-        <div className="card performance-card">
-            <h4 className="kpi-card-label">TOTAL TRADES</h4>
-            <div className="performance-value">{stats.totalTrades}</div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="chart-header" style={{ marginBottom: "20px" }}>
-          <h3 className="chart-title">Curva de Rendimiento Temporal</h3>
-          <div className="tags-selector" style={{ marginTop: 0 }}>
-            <button 
-              className={`tag-btn ${chartMode === "daily" ? "active" : ""}`}
-              onClick={() => setViewMode("daily")}
-            >
-              Día
-            </button>
-            <button 
-              className={`tag-btn ${chartMode === "monthly" ? "active" : ""}`}
-              onClick={() => setViewMode("monthly")}
-            >
-              Mes
-            </button>
+      <div className="metrics-main-content">
+        <div className="stats-sidebar" style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          <div className="card performance-card" style={{ marginBottom: 0 }}>
+              <h4 className="kpi-card-label">WIN RATE</h4>
+              <div className="performance-value" style={{ fontSize: "24px" }}>{stats.winRate}%</div>
+          </div>
+          <div className="card performance-card" style={{ marginBottom: 0 }}>
+              <h4 className="kpi-card-label">AVG WIN / LOSS</h4>
+              <div className="performance-value text-success" style={{ fontSize: "20px" }}>
+                +{stats.avgWin} <span style={{fontSize: "14px", color: "var(--text-muted)"}}>/</span> <span className="text-danger">-{stats.avgLoss}</span>
+              </div>
+          </div>
+          <div className="card performance-card" style={{ marginBottom: 0 }}>
+              <h4 className="kpi-card-label">TOTAL TRADES</h4>
+              <div className="performance-value" style={{ fontSize: "24px" }}>{stats.totalTrades}</div>
           </div>
         </div>
-        <div style={{ height: "250px", width: "100%" }}>
-          <ResponsiveContainer>
-            <BarChart data={chartMode === "daily" ? stats.dailyData : stats.monthlyData}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-              <XAxis 
-                dataKey={chartMode === "daily" ? "date" : "month"} 
-                tick={{ fill: "#F8FAFC", fontSize: 11, fontWeight: 500 }} 
-                axisLine={false} 
-                tickLine={false}
-              />
-              <YAxis 
-                tick={{ fill: "#F8FAFC", fontSize: 11, fontWeight: 500 }} 
-                axisLine={false} 
-                tickLine={false}
-                tickFormatter={(val) => `$${val}`}
-              />
-              <ReTooltip 
-                contentStyle={{ backgroundColor: "var(--bg-app)", border: "1px solid var(--border)", borderRadius: "8px" }}
-                itemStyle={{ fontWeight: "bold", color: "#fff", fontSize: "14px" }}
-                labelStyle={{ color: "var(--text-muted)" }}
-                cursor={{ fill: 'rgba(255, 255, 255, 0.05)' }}
-              />
-              <Bar dataKey="pnl" radius={[4, 4, 0, 0]}>
-                {(chartMode === "daily" ? stats.dailyData : stats.monthlyData).map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.pnl >= 0 ? "var(--success)" : "var(--danger)"} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="chart-header" style={{ marginBottom: "20px" }}>
+            <h3 className="chart-title">Curva de Rendimiento Temporal</h3>
+            <div className="tags-selector" style={{ marginTop: 0 }}>
+              <button 
+                className={`tag-btn ${chartMode === "daily" ? "active" : ""}`}
+                onClick={() => setViewMode("daily")}
+              >Día</button>
+              <button 
+                className={`tag-btn ${chartMode === "monthly" ? "active" : ""}`}
+                onClick={() => setViewMode("monthly")}
+              >Mes</button>
+            </div>
+          </div>
+          <div style={{ height: "300px", width: "100%" }}>
+            <ResponsiveContainer>
+              <BarChart data={chartMode === "daily" ? stats.dailyData : stats.monthlyData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                <XAxis 
+                  dataKey={chartMode === "daily" ? "date" : "month"} 
+                  tick={{ fill: "#F8FAFC", fontSize: 11, fontWeight: 500 }} 
+                  axisLine={false} 
+                  tickLine={false}
+                />
+                <YAxis 
+                  tick={{ fill: "#F8FAFC", fontSize: 11, fontWeight: 500 }} 
+                  axisLine={false} 
+                  tickLine={false}
+                  tickFormatter={(val) => `$${val}`}
+                />
+                <ReTooltip 
+                  contentStyle={{ backgroundColor: "var(--bg-app)", border: "1px solid var(--border)", borderRadius: "8px" }}
+                  itemStyle={{ fontWeight: "bold", color: "#fff", fontSize: "14px" }}
+                  labelStyle={{ color: "var(--text-muted)" }}
+                  cursor={{ fill: 'rgba(255, 255, 255, 0.05)' }}
+                />
+                <Bar dataKey="pnl" radius={[4, 4, 0, 0]}>
+                  {(chartMode === "daily" ? stats.dailyData : stats.monthlyData).map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.pnl >= 0 ? "var(--success)" : "var(--danger)"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
 
-      <div className="card">
+      <div className="card" style={{ marginTop: "20px" }}>
         <h3 className="chart-title" style={{ marginBottom: "20px" }}>Rentabilidad por Activo</h3>
         <div style={{ height: "250px", width: "100%" }}>
           <ResponsiveContainer>
