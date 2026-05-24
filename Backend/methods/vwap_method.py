@@ -6,11 +6,10 @@ def analyze(features):
     if len(features) < 20:
         return None, 0
 
-    df    = features.copy()
-    close = df['close'].values
-    high  = df['high'].values
-    low   = df['low'].values
-    vol   = df['volume'].values
+    close = features['close'].values
+    high  = features['high'].values
+    low   = features['low'].values
+    vol   = features['volume'].values
 
     typical_price = (high + low + close) / 3
     cum_tp_vol    = np.cumsum(typical_price * vol)
@@ -31,12 +30,11 @@ def analyze(features):
     above_vwap = last_price > last_vwap
     below_vwap = last_price < last_vwap
 
-    prev_prices = close[-6:-1]
-    prev_vwaps  = vwap[-6:-1]
-    crossed_up   = any(prev_prices[i] < prev_vwaps[i] and close[-1] > last_vwap
-                       for i in range(len(prev_prices)))
-    crossed_down = any(prev_prices[i] > prev_vwaps[i] and close[-1] < last_vwap
-                       for i in range(len(prev_prices)))
+    # Optimización: Solo verificamos el cruce con respecto a la vela anterior para mayor precisión
+    prev_price = close[-2]
+    prev_vwap_val = vwap[-2]
+    crossed_up = prev_price <= prev_vwap_val and last_price > last_vwap
+    crossed_down = prev_price >= prev_vwap_val and last_price < last_vwap
 
     if crossed_up and last_vol_ratio > 1.2:
         return 1, 0.82

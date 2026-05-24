@@ -336,7 +336,7 @@ def main():
                 "total_operaciones": int(web_trades_global),
                 "operaciones_activas": web_operaciones_activas
             }
-            with open("storage/live_state.json", "w", encoding="utf-8") as f:
+            with open(config.LIVE_STATE_PATH, "w", encoding="utf-8") as f:
                 json.dump(estado_en_vivo, f)
         except IOError as e:
             logger.error(f"Failed to write live_state.json: {e}")

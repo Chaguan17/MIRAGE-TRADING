@@ -23,7 +23,7 @@ class RiskManager:
                 )
                 if new_risk != self._current_risk:
                     self._current_risk = new_risk
-                    print(f"📈 Racha ganadora — riesgo subido a {self._current_risk:.1%}")
+                    logger.info(f"📈 {config.SYMBOL}: Racha ganadora — riesgo subido a {self._current_risk:.1%}")
         else:
             self._consecutive_wins   = 0
             self._consecutive_losses += 1
@@ -32,7 +32,7 @@ class RiskManager:
             if config.MARTINGALE_ENABLED and self._martingale_step < config.MARTINGALE_MAX_STEPS:
                 self._martingale_step += 1
                 self._current_risk *= config.MARTINGALE_MULTIPLIER
-                print(f"⚠️ MARTINGALA ACTIVA (Paso {self._martingale_step}) — riesgo subido a {self._current_risk:.1%}")
+                logger.warning(f"⚠️ {config.SYMBOL}: MARTINGALA ACTIVA (Paso {self._martingale_step}) — riesgo subido a {self._current_risk:.1%}")
             elif not config.MARTINGALE_ENABLED and self._consecutive_losses >= config.MAX_CONSECUTIVE_LOSSES:
                 new_risk = max(
                     self._current_risk * config.RISK_REDUCTION_FACTOR,
@@ -40,7 +40,7 @@ class RiskManager:
                 )
                 if new_risk != self._current_risk:
                     self._current_risk = new_risk
-                    print(f"📉 Racha perdedora — riesgo reducido a {self._current_risk:.1%}")
+                    logger.info(f"📉 {config.SYMBOL}: Racha perdedora — riesgo reducido a {self._current_risk:.1%}")
 
     def get_current_risk(self):
         return self._current_risk
