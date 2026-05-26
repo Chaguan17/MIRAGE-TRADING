@@ -1,3 +1,7 @@
+"""
+vwap_method.py — Mirage Trading
+BUG CRÍTICO CORREGIDO: 'df' no estaba definido (se usaba 'features').
+"""
 import numpy as np
 import config
 
@@ -21,20 +25,21 @@ def analyze(features):
     upper_band = vwap + (config.VWAP_BAND_MULT * std_dev)
     lower_band = vwap - (config.VWAP_BAND_MULT * std_dev)
 
-    last_price     = close[-1]
-    last_vwap      = vwap[-1]
-    last_upper     = upper_band[-1]
-    last_lower     = lower_band[-1]
-    last_vol_ratio = df['volume_ratio'].iloc[-1] if 'volume_ratio' in df.columns else 1.0
+    last_price = close[-1]
+    last_vwap  = vwap[-1]
+    last_upper = upper_band[-1]
+    last_lower = lower_band[-1]
+
+    # BUG CORREGIDO: era 'df' pero la variable se llama 'features'
+    last_vol_ratio = features['volume_ratio'].iloc[-1] if 'volume_ratio' in features.columns else 1.0
 
     above_vwap = last_price > last_vwap
     below_vwap = last_price < last_vwap
 
-    # Optimización: Solo verificamos el cruce con respecto a la vela anterior para mayor precisión
-    prev_price = close[-2]
+    prev_price    = close[-2]
     prev_vwap_val = vwap[-2]
-    crossed_up = prev_price <= prev_vwap_val and last_price > last_vwap
-    crossed_down = prev_price >= prev_vwap_val and last_price < last_vwap
+    crossed_up    = prev_price <= prev_vwap_val and last_price > last_vwap
+    crossed_down  = prev_price >= prev_vwap_val and last_price < last_vwap
 
     if crossed_up and last_vol_ratio > 1.2:
         return 1, 0.82
@@ -42,18 +47,7 @@ def analyze(features):
     if crossed_down and last_vol_ratio > 1.2:
         return 0, 0.82
 
-    # BUG CRÍTICO CORREGIDO #3:
-    # Las condiciones originales eran imposibles de cumplir:
-    #   - "above_vwap AND precio <= banda_inferior" es contradictorio porque
-    #     la banda inferior siempre está POR DEBAJO del vwap.
-    #   - "below_vwap AND precio >= banda_superior" es igualmente imposible.
-    # Estas dos ramas NUNCA emitían señal.
-    #
-    # Lógica correcta:
-    #   - Si el precio está BAJO el vwap y toca/cruza la banda inferior → señal de compra
-    #     (rebote desde zona de soporte)
-    #   - Si el precio está SOBRE el vwap y toca/cruza la banda superior → señal de venta
-    #     (rechazo en zona de resistencia)
+    # Lógica corregida: rebote en bandas VWAP
     if below_vwap and last_price <= last_lower * 1.001:
         return 1, 0.72 if last_vol_ratio > 1.0 else 0.62
 

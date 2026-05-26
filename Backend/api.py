@@ -201,6 +201,8 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
     COOLDOWN_CANDLES: int | None = None
     # Configuración de Flota y Horarios
     PARES_ACTIVOS: list[str] | None = None
+    TIMEFRAME: str | None = None
+    PARES_ACTIVOS: list[str] | None = None
     SLEEP_START_HOUR: int | None = None
     SLEEP_START_MINUTE: int | None = None
     SLEEP_END_HOUR: int | None = None

@@ -74,14 +74,20 @@ const S = {
   },
 
   btnPrimary: {
-    background: "linear-gradient(135deg, #aa3bff, #8b25e0)",
-    color: "white",
-    border: "none",
-    padding: "11px 24px",
-    borderRadius: "10px",
-    fontWeight: "700",
+    background: "none",
+    border: "1px solid #1e293b",
+    color: "#7526b6",
+    fontWeight: "600",
+    fontSize: "0.875rem",
     cursor: "pointer",
-    boxShadow: "0 4px 15px rgba(170, 59, 255, 0.25)",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "8px",
+    textDecoration: "none",
+    padding: "8px 14px",
+    borderRadius: "8px",
+    transition: "all 0.2s",
+    whiteSpace: "nowrap",
   },
 
   card: {
@@ -305,7 +311,8 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
   const handleNumericCommit = useCallback(() => {
     if (localValue === "" || localValue === null) return;
 
-    let num = parseFloat(localValue);
+    const sanitized = String(localValue).replace(",", ".");
+    let num = parseFloat(sanitized);
 
     if (isNaN(num)) {
       setLocalValue(displayValue);
@@ -585,12 +592,14 @@ export default function SettingsView() {
         },
         body: JSON.stringify(config),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(JSON.stringify(errorData.detail || "Error desconocido"));
+        throw new Error(
+          JSON.stringify(errorData.detail || "Error desconocido"),
+        );
       }
-      
+
       alert("✅ Configuración guardada con éxito");
       navigate("/");
     } catch (err) {
@@ -606,6 +615,9 @@ export default function SettingsView() {
       <div style={S.layout}>
         {/* HEADER */}
         <header style={S.header}>
+          <button onClick={() => navigate("/")} style={{ ...S.btnPrimary }}>
+            ← Volver al Terminal
+          </button>
           <h2 style={S.title}>Configuración Mirage</h2>
 
           <button onClick={saveSettings} style={S.btnPrimary}>
