@@ -1,11 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 import pandas as pd
 import json
 import os
 import sqlite3
 import logging
 import importlib
+import asyncio
 import config as cfg
 
 logger = logging.getLogger(__name__)
@@ -20,6 +22,41 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        """Envía datos a todos los clientes conectados de forma asíncrona."""
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                pass
+
+manager = ConnectionManager()
+
+@app.on_event("startup")
+async def startup_event():
+    """Inicia el broadcaster en segundo plano al arrancar la API."""
+    asyncio.create_task(dashboard_broadcaster())
+
+async def dashboard_broadcaster():
+    """Ciclo centralizado que hace push de actualizaciones cada 2 segundos."""
+    while True:
+        if manager.active_connections:
+            payload = _fetch_dashboard_data()
+            await manager.broadcast(payload)
+        await asyncio.sleep(2)
 
 if not os.path.exists(cfg.SETTINGS_PATH):
     default_settings = {
@@ -37,13 +74,11 @@ if not os.path.exists(cfg.SETTINGS_PATH):
 def read_root():
     return {"status": "online", "bot": "Mirage Trading"}
 
-@app.get("/api/dashboard")
-def get_dashboard_data():
+def _fetch_dashboard_data():
+    """Lógica centralizada para obtener métricas, usada por REST y WebSockets."""
     try:
-        # Sinergia: Recargamos el módulo config para que el Dashboard 
-        # siempre muestre los valores reales actuales (ej. pares activos)
         importlib.reload(cfg)
-        
+
         try:
             with open(cfg.LIVE_STATE_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -85,8 +120,25 @@ def get_dashboard_data():
 
         return data
     except Exception as e:
-        logger.error(f"Error in get_dashboard_data: {e}")
+        logger.error(f"Error in _fetch_dashboard_data: {e}")
         return {"error": str(e)}
+
+@app.get("/api/dashboard")
+def get_dashboard_data():
+    """Mantiene compatibilidad con polling o carga inicial."""
+    return _fetch_dashboard_data()
+
+@app.websocket("/ws/dashboard")
+async def dashboard_websocket(websocket: WebSocket):
+    """Suspensión de WebSocket para actualizaciones en tiempo real."""
+    await manager.connect(websocket)
+    try:
+        # Envío inicial inmediato al conectar
+        await websocket.send_json(_fetch_dashboard_data())
+        while True:
+            await websocket.receive_text() # Mantiene la conexión viva y escucha desconexiones
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 @app.get("/api/performance")
 async def get_full_performance():
@@ -132,20 +184,57 @@ def get_config():
         logger.error(f"Error reading config: {e}")
         return {}
 
-@app.post("/api/config")
-def update_config(new_settings: dict):
+class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar errores 422 antes de normalizar
+    LEVERAGE: int | None = Field(None, ge=1, le=125)
+    RISK_PER_TRADE: float | None = Field(None, ge=0, le=100)
+    MIN_CONFIDENCE: float | None = Field(None, ge=0, le=100)
+    PAPER_BALANCE: float | None = Field(None, ge=1)
+    # Gestión de Salidas (Stops) - Permitimos valores desde 0 para flexibilidad total
+    ATR_MULTIPLIER: float | None = Field(None, ge=0)
+    TP_MULTIPLIER: float | None = Field(None, ge=0)
+    TRAILING_STOP_ACTIVATION: float | None = Field(None, ge=0)
+    TRAILING_STOP_DISTANCE: float | None = Field(None, ge=0)
+    BREAKEVEN_ACTIVATION: float | None = Field(None, ge=0)
+    # Estrategia de Capital
+    MARTINGALE_ENABLED: bool | None = None
+    MAX_BULLETS: int | None = None
+    COOLDOWN_CANDLES: int | None = None
+    # Configuración de Flota y Horarios
+    PARES_ACTIVOS: list[str] | None = None
+    TIMEFRAME: str | None = None
+    PARES_ACTIVOS: list[str] | None = None
+    SLEEP_START_HOUR: int | None = None
+    SLEEP_START_MINUTE: int | None = None
+    SLEEP_END_HOUR: int | None = None
+    SLEEP_END_MINUTE: int | None = None
+
+@app.post("/api/config") # Modificado: Usa el modelo ConfigUpdate para validación
+def update_config(new_settings: ConfigUpdate): 
+    logger.info(f"Recibida actualización de config: {new_settings}")
     try:
-        current = {}
-        if os.path.exists(cfg.SETTINGS_PATH):
-            with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
-                current = json.load(f)
+        current = cfg.load_dynamic_settings()
     except Exception as e:
         logger.warning(f"Could not read existing config for merge: {e}")
         current = {}
-
-    merged = {**current, **new_settings}
-
+    
+    validated = new_settings.model_dump(exclude_none=True)
+    
+    percentage_fields = [
+        "RISK_PER_TRADE",
+        "MIN_CONFIDENCE",
+        "TRAILING_STOP_ACTIVATION",
+        "TRAILING_STOP_DISTANCE",
+        "BREAKEVEN_ACTIVATION"
+    ]
+    
+    for field in percentage_fields:
+        if field in validated:
+            value = validated[field]
+            if value > 1:
+                validated[field] = value / 100.0
+    
+    merged = {**current, **validated}
     with open(cfg.SETTINGS_PATH, "w", encoding="utf-8") as f:
         json.dump(merged, f, indent=4)
-
-    return {"status": "success", "updated_keys": list(new_settings.keys())}
+    
+    return {"status": "success", "updated_keys": list(validated.keys())}

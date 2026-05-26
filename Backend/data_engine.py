@@ -62,8 +62,13 @@ class DataEngine:
 
         # ── 6. VWAP ─────────────────────────────────────────────────────────
         typical_price  = (df['high'] + df['low'] + df['close']) / 3
-        cum_tp_vol     = (typical_price * df['volume']).cumsum()
-        cum_vol        = df['volume'].cumsum()
+        window = 100
+        cum_tp_vol = (
+            typical_price * df['volume']
+        ).rolling(window).sum()
+        cum_vol = (
+            df['volume']
+        ).rolling(window).sum()
         df['VWAP']     = cum_tp_vol / (cum_vol + 1e-9)
         df['VWAP_dist'] = (df['close'] - df['VWAP']) / (df['VWAP'] + 1e-9) * 100
 

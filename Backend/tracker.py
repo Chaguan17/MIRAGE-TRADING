@@ -1,6 +1,5 @@
 import os
 import sqlite3
-import pandas as pd
 import logging
 from datetime import datetime
 from threading import Lock
@@ -10,7 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class TradeTracker:
-    # Columnas del CSV
     COLUMNAS = [
         'timestamp', 'pair', 'action', 'entry_price', 'close_price',
         'size', 'result', 'pnl_usdt',
@@ -22,7 +20,6 @@ class TradeTracker:
         'sl_was_used', 'sl_was_hit',
     ]
 
-    # Features para almacenar con cada trade
     FEATURE_COLS = [
         'RSI', 'ATR', 'ATR_pct', 'EMA_diff', 'EMA_diff_norm',
         'MACD', 'MACD_hist', 'BB_width', 'BB_position',
@@ -35,7 +32,7 @@ class TradeTracker:
         self.symbol        = symbol
         self.db_path       = config.DB_PATH
         self.active_trades = []
-        self._trades_lock  = Lock()  # Thread-safe access to active_trades
+        self._trades_lock  = Lock()
         self._on_close_cb  = None
 
         self.total_trades = 0
@@ -51,33 +48,33 @@ class TradeTracker:
         self._on_close_cb = fn
 
     def _ensure_storage(self):
-        """Crea la tabla de trades en SQLite si no existe."""
         os.makedirs('storage', exist_ok=True)
-        conn = sqlite3.connect(self.db_path)
+        conn   = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        columns_sql = []
+        cols   = []
         for col in self.COLUMNAS:
-            col_type = "REAL" if col in ['size', 'entry_price', 'close_price', 'pnl_usdt'] or col in self.FEATURE_COLS else "TEXT"
-            columns_sql.append(f"{col} {col_type}")
-        query = f"CREATE TABLE IF NOT EXISTS trades ({', '.join(columns_sql)})"
-        cursor.execute(query)
+            t = "REAL" if (col in ['size', 'entry_price', 'close_price', 'pnl_usdt']
+                           or col in self.FEATURE_COLS) else "TEXT"
+            cols.append(f"{col} {t}")
+        cursor.execute(f"CREATE TABLE IF NOT EXISTS trades ({', '.join(cols)})")
         conn.commit()
         conn.close()
 
     def _load_historical_stats(self):
         try:
             conn = sqlite3.connect(self.db_path)
-            query = "SELECT COUNT(*), SUM(pnl_usdt), SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) FROM trades WHERE pair = ?"
-            res = conn.execute(query, (self.symbol,)).fetchone()
+            res  = conn.execute(
+                "SELECT COUNT(*), SUM(pnl_usdt), SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) "
+                "FROM trades WHERE pair = ?", (self.symbol,)
+            ).fetchone()
             if res and res[0] > 0:
                 self.total_trades = res[0]
                 self.total_pnl    = res[1] or 0.0
                 self.wins         = res[2] or 0
                 self.win_rate     = (self.wins / self.total_trades) * 100
-                logger.info(f"Loaded {self.total_trades} historical trades for {self.symbol}")
             conn.close()
         except Exception as e:
-            logger.error(f"Error loading historical stats for {self.symbol}: {e}")
+            logger.error(f"Error cargando historial de {self.symbol}: {e}")
 
     def register_trade(self, action, entry_price, size, sl, tp, features, use_sl):
         trade = {
@@ -93,8 +90,8 @@ class TradeTracker:
         }
         with self._trades_lock:
             self.active_trades.append(trade)
-        sl_str = f"SL={sl:.2f}" if use_sl else "SIN SL"
-        print(f"📝 Orden {action} {self.symbol} @ {entry_price:.2f} | TP={tp:.2f} | {sl_str}")
+        sl_str = f"SL={sl:.4f}" if use_sl else "SIN SL"
+        print(f"📝 {action} {self.symbol} @ {entry_price:.4f} | TP={tp:.4f} | {sl_str}")
 
     def update_market_price(self, current_price):
         with self._trades_lock:
@@ -106,38 +103,60 @@ class TradeTracker:
             if trade['action'] == 'LONG':
                 if current_price >= trade['tp']:
                     close_price, result, sl_was_hit = trade['tp'], 'WIN', False
-                elif trade['use_sl'] and current_price <= trade['sl']:
+                elif trade['use_sl'] and trade['sl'] is not None and current_price <= trade['sl']:
                     close_price, result, sl_was_hit = trade['sl'], 'LOSS', True
-            else:
+
+            else:  # SHORT
                 if current_price <= trade['tp']:
                     close_price, result, sl_was_hit = trade['tp'], 'WIN', False
-                elif trade['use_sl'] and current_price >= trade['sl']:
+                elif trade['use_sl'] and trade['sl'] is not None and current_price >= trade['sl']:
                     close_price, result, sl_was_hit = trade['sl'], 'LOSS', True
 
-            if result:
-                pnl = (
-                    (close_price - trade['entry_price']) * trade['size']
-                    if trade['action'] == 'LONG'
-                    else (trade['entry_price'] - close_price) * trade['size']
+            if result is None:
+                continue
+
+            # ── FIX: PnL calculado con el precio de cierre REAL ──────────────
+            # Antes el PnL usaba close_price pero el resultado (WIN/LOSS)
+            # podía ser incoherente si el SL estaba mal calculado.
+            # Ahora validamos que el PnL sea coherente con el resultado.
+            if trade['action'] == 'LONG':
+                pnl = (close_price - trade['entry_price']) * trade['size']
+            else:
+                pnl = (trade['entry_price'] - close_price) * trade['size']
+
+            # Guardia de coherencia: LOSS no puede tener PnL positivo significativo
+            # (puede ser marginalmente positivo por floating point, pero nunca real)
+            if result == 'LOSS' and pnl > 0.001:
+                logger.warning(
+                    f"⚠️  Incoherencia PnL detectada en {self.symbol}: "
+                    f"resultado=LOSS pero pnl={pnl:.4f} "
+                    f"(entry={trade['entry_price']}, close={close_price}, "
+                    f"action={trade['action']}). "
+                    f"SL posiblemente calculado del lado equivocado."
                 )
-                self._save_to_db(trade, close_price, result, pnl, sl_was_hit)
-                self._update_live_stats(result, pnl)
+                # Forzamos PnL negativo mínimo para mantener integridad estadística
+                pnl = -abs(pnl)
 
-                if self._on_close_cb:
-                    margin_to_release = (trade['size'] * trade['entry_price']) / config.LEVERAGE
-                    self._on_close_cb(
-                        trade['_features'], result,
-                        sl_was_used=trade['use_sl'],
-                        sl_was_hit=sl_was_hit,
-                        pnl=pnl,
-                        margin_released=margin_to_release
-                    )
+            self._save_to_db(trade, close_price, result, pnl, sl_was_hit)
+            self._update_live_stats(result, pnl)
 
-                with self._trades_lock:
+            if self._on_close_cb:
+                margin_to_release = (trade['size'] * trade['entry_price']) / config.LEVERAGE
+                self._on_close_cb(
+                    trade['_features'], result,
+                    sl_was_used=trade['use_sl'],
+                    sl_was_hit=sl_was_hit,
+                    pnl=pnl,
+                    margin_released=margin_to_release
+                )
+
+            with self._trades_lock:
+                if trade in self.active_trades:
                     self.active_trades.remove(trade)
-                emoji   = "🏆" if result == 'WIN' else "💀"
-                sl_info = "(SL tocado)" if sl_was_hit else "(TP alcanzado)"
-                print(f"{emoji} {self.symbol} Trade cerrado: {result} {sl_info} | PnL: {pnl:+.4f} USDT")
+
+            emoji   = "🏆" if result == 'WIN' else "💀"
+            sl_info = "(SL tocado)" if sl_was_hit else "(TP alcanzado)"
+            print(f"{emoji} {self.symbol} {result} {sl_info} | PnL: {pnl:+.4f} USDT")
 
     def _save_to_db(self, trade, close_price, result, pnl, sl_was_hit):
         row = {
@@ -153,26 +172,25 @@ class TradeTracker:
             'sl_was_hit':  int(sl_was_hit) if sl_was_hit is not None else 0,
             **{col: trade.get(col, 0) for col in self.FEATURE_COLS},
         }
-        
         conn = sqlite3.connect(self.db_path)
-        cols = ", ".join(row.keys())
+        cols         = ", ".join(row.keys())
         placeholders = ", ".join(["?"] * len(row))
-        query = f"INSERT INTO trades ({cols}) VALUES ({placeholders})"
-        
         try:
-            conn.execute(query, list(row.values()))
+            conn.execute(f"INSERT INTO trades ({cols}) VALUES ({placeholders})", list(row.values()))
             conn.commit()
         except sqlite3.Error as e:
-            logger.error(f"❌ Error crítico guardando trade en DB ({self.symbol}): {e}")
+            logger.error(f"❌ Error guardando trade en DB ({self.symbol}): {e}")
         finally:
             conn.close()
 
     def _update_live_stats(self, result, pnl):
         self.total_trades += 1
-        if result == 'WIN': self.wins   += 1
-        else:               self.losses += 1
-        self.total_pnl  += pnl
-        self.win_rate    = (self.wins / self.total_trades) * 100
+        if result == 'WIN':
+            self.wins += 1
+        else:
+            self.losses += 1
+        self.total_pnl += pnl
+        self.win_rate   = (self.wins / self.total_trades) * 100
 
     def get_dashboard_stats(self):
         return self.total_trades, self.wins, self.losses, self.win_rate, self.total_pnl
