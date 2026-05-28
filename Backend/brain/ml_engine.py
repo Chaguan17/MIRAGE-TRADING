@@ -64,7 +64,7 @@ class MLEngine:
             class_weight='balanced_subsample',
             random_state=self.config.RANDOM_STATE,
             warm_start=False,
-            n_jobs=-1
+            n_jobs= 1
         )
 
     # ── Predicciones ─────────────────────────────────────────────────────────

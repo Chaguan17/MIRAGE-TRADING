@@ -43,7 +43,7 @@ class Trainer:
                 min_samples_leaf=5,
                 class_weight=w or 'balanced_subsample',
                 random_state=self.cfg.RANDOM_STATE,
-                n_jobs=-1
+                n_jobs=1
             )
             self.ml.model_outcome.fit(Xs, y_outcome)
 
@@ -60,7 +60,7 @@ class Trainer:
                         min_samples_leaf=5,
                         class_weight=w_sl or 'balanced_subsample',
                         random_state=self.cfg.RANDOM_STATE,
-                        n_jobs=-1
+                        n_jobs=1
                     )
                     self.ml.model_sl.fit(Xs_sl, y_sl)
 
