@@ -1,11 +1,3 @@
-"""
-main.py — Mirage Trading
-FIXES:
-- RiskManager recibe el balance inicial para el sistema adaptativo
-- calculate_position_size recibe current_balance para adaptar el riesgo al vuelo
-- global_btc_features se asigna correctamente cuando BTC está en la flota
-- Eliminado bug de scope en make_callback (ya estaba correcto, se mantiene)
-"""
 import time
 import os
 import shutil
@@ -103,7 +95,7 @@ def main():
     os.makedirs("storage", exist_ok=True)
     pares_activos = config.PARES_ACTIVOS
 
-    # Motor BTC de contexto (si BTC no está en la flota)
+    # Motor BTC de contexto (solo si BTC NO está en la flota activa)
     btc_context_engine = None
     if 'BTCUSDT' not in pares_activos:
         btc_context_engine = data_engine.DataEngine()
@@ -174,14 +166,20 @@ def main():
         account_balance   = api.get_balance()
         available_margin  = api.get_available_margin()
 
-        global_btc_features   = None
         web_operaciones_activas = []
         web_pnl_global        = 0
         web_trades_global     = 0
         web_wins_global       = 0
 
-        # Contexto BTC (si no está en la flota)
-        if btc_context_engine:
+        # ── SOLUCIÓN PUNTO 3: Obtención anticipada del contexto global de BTC ──
+        global_btc_features = None
+        if 'BTCUSDT' in pares_activos:
+            # Si BTC está en la flota, descargamos sus datos al principio del ciclo para alimentar a los demás pares
+            btc_raw = api.get_historical_data('BTCUSDT', config.TIMEFRAME, limit=200)
+            if btc_raw is not None:
+                global_btc_features = bots['BTCUSDT']['engine'].prepare_features(btc_raw)
+        elif btc_context_engine:
+            # Si BTC no está en la flota, usamos el motor aislado de contexto
             btc_raw = api.get_historical_data('BTCUSDT', config.TIMEFRAME, limit=200)
             if btc_raw is not None:
                 global_btc_features = btc_context_engine.prepare_features(btc_raw)
@@ -190,19 +188,19 @@ def main():
         for sym in pares_activos:
             b = bots[sym]
             try:
-                live_data = api.get_historical_data(sym, config.TIMEFRAME, limit=200)
-                if live_data is None:
-                    continue
+                # Optimización: si procesamos BTCUSDT y ya lo descargamos arriba para el contexto, lo reutilizamos
+                if sym == 'BTCUSDT' and global_btc_features is not None:
+                    features = global_btc_features
+                else:
+                    live_data = api.get_historical_data(sym, config.TIMEFRAME, limit=200)
+                    if live_data is None:
+                        continue
+                    features = b['engine'].prepare_features(live_data)
 
                 b['consecutive_errors'] = 0
-                current_price = live_data.iloc[-1]['close']
-                features      = b['engine'].prepare_features(live_data)
+                current_price = features.iloc[-1]['close']
                 last_row      = features.iloc[-1].to_dict()
                 atr_current   = last_row.get('ATR', 0)
-
-                # BTC en la flota → provee contexto global
-                if sym == 'BTCUSDT':
-                    global_btc_features = features
 
                 # ── Gestión de trades activos ─────────────────────────────────
                 with b['tr']._trades_lock:
@@ -281,20 +279,22 @@ def main():
                         )
                         if is_hit:
                             print(f"   🎯 {sym} SCALE-IN @ {current_price}")
-                            # FIX: pasa current_balance para riesgo adaptativo
+                            # MEJORA DE RIESGO: Argumentos explícitos por clave para el dimensionamiento adaptativo exacto
                             size = b['rm'].calculate_position_size(
-                                available_margin, current_price,
-                                t_ref['sl'] if t_ref.get('use_sl') else None,
+                                account_balance=account_balance,
+                                entry_price=current_price,
+                                stop_loss_price=t_ref['sl'] if t_ref.get('use_sl') else None,
                                 current_balance=account_balance
                             )
                             if size > 0:
                                 margin_needed = (size * current_price) / config.LEVERAGE
-                                api.occupy_margin(margin_needed)
-                                b['tr'].register_trade(
-                                    t_ref['action'], current_price, size,
-                                    t_ref['sl'], t_ref['tp'], last_row,
-                                    t_ref.get('use_sl', True)
-                                )
+                                if margin_needed <= available_margin:
+                                    api.occupy_margin(margin_needed)
+                                    b['tr'].register_trade(
+                                        t_ref['action'], current_price, size,
+                                        t_ref['sl'], t_ref['tp'], last_row,
+                                        t_ref.get('use_sl', True)
+                                    )
 
                 # ── Señal de entrada ──────────────────────────────────────────
                 action_code, confidence, method_name, use_sl = b['brain'].get_consensus_prediction(
@@ -315,20 +315,24 @@ def main():
                         current_price, atr_current, action_str,
                         atr_pct=last_row.get('ATR_pct')
                     )
-                    # FIX: pasa current_balance para que el sizing sea adaptativo
+                    # MEJORA DE RIESGO: Argumentos explícitos por clave para evitar degradación por balance vs margen
                     size = b['rm'].calculate_position_size(
-                        available_margin, current_price,
-                        sl if use_sl else None,
+                        account_balance=account_balance,
+                        entry_price=current_price,
+                        stop_loss_price=sl if use_sl else None,
                         current_balance=account_balance
                     )
                     if size > 0:
                         margin_needed = (size * current_price) / config.LEVERAGE
-                        api.occupy_margin(margin_needed)
-                        print(f"   🧠 SEÑAL: {action_str} | {method_name.upper()} | "
-                              f"conf: {confidence:.2%} | size: {size} | risk: {b['rm'].get_current_risk():.2%}")
-                        b['tr'].register_trade(
-                            action_str, current_price, size, sl, tp, last_row, use_sl
-                        )
+                        if margin_needed <= available_margin:
+                            api.occupy_margin(margin_needed)
+                            print(f"   🧠 SEÑAL: {action_str} | {method_name.upper()} | "
+                                  f"conf: {confidence:.2%} | size: {size} | risk: {b['rm'].get_current_risk():.2%}")
+                            b['tr'].register_trade(
+                                action_str, current_price, size, sl, tp, last_row, use_sl
+                            )
+                        else:
+                            logger.warning(f"⚠️ Margen insuficiente para abrir {sym}. Requerido: {margin_needed:.2f}")
                 else:
                     if b['cooldown_left'] > 0:
                         b['cooldown_left'] -= 1
@@ -343,11 +347,10 @@ def main():
         # ── Actualizar dashboard ──────────────────────────────────────────────
         try:
             wr_global = (web_wins_global / web_trades_global * 100) if web_trades_global > 0 else 0
-            # FIX: incluir estado del risk manager de cada par
             rm_status = {sym: bots[sym]['rm'].get_status_dict() for sym in pares_activos}
             estado = {
-                "pnl_total":          round(float(web_pnl_global), 2),
-                "win_rate":           round(float(wr_global), 1),
+                "pnl_total":           round(float(web_pnl_global), 2),
+                "win_rate":            round(float(wr_global), 1),
                 "total_operaciones":  int(web_trades_global),
                 "operaciones_activas":web_operaciones_activas,
                 "balance_actual":     round(account_balance, 2),
