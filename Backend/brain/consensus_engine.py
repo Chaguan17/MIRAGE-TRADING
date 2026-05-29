@@ -3,7 +3,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ConsensusEngine:
-    # Umbrales de conflicto configurables
     GLOBAL_CONFLICT_THRESHOLD = 0.8
     LAYER_CONFLICT_THRESHOLD = 0.7
     EPSILON = 1e-9
@@ -34,7 +33,6 @@ class ConsensusEngine:
         v_max = max(final_votes[1], final_votes[0])
         v_min = min(final_votes[1], final_votes[0])
 
-        # Detección de conflicto global entre capas
         if v_min > 0 and (v_min / v_max) > self.GLOBAL_CONFLICT_THRESHOLD:
             return None, 0, 'Global Consensus Conflict'
 
@@ -42,7 +40,6 @@ class ConsensusEngine:
         total = final_votes[1] + final_votes[0] + self.EPSILON
         final_conf = final_votes[winner] / total
         
-        # Selección de nombre basada en prioridad: Estructura > Básico > Contexto
         priority_map = [
             (s_action, s_name),
             (b_action, b_name),
@@ -50,19 +47,16 @@ class ConsensusEngine:
         ]
         
         method_name = next((name for act, name in priority_map if act == winner), 'Unknown')
-
         return winner, final_conf, method_name
 
     def _layer_vote(self, signals):
-        """Calcula el ganador dentro de una sola capa."""
+        """Calcula el ganador dentro de una sola capa con atribución de estrategia corregida."""
         votes = {1: 0.0, 0: 0.0}
-        best_conf, best_method = 0, 'None'
         
+        # 1. Sumarizar votación de la capa
         for name, (action, conf) in signals.items():
             if action is not None:
                 votes[action] += conf
-                if conf > best_conf:
-                    best_conf, best_method = conf, name
                     
         if votes[1] == 0 and votes[0] == 0:
             return None, 0, 'None'
@@ -74,4 +68,12 @@ class ConsensusEngine:
 
         winner = max(votes, key=votes.get)
         total = votes[1] + votes[0] + self.EPSILON
-        return winner, votes[winner] / total, best_method
+        layer_conf = votes[winner] / total
+
+        # 2. FIX: Atribución correcta. Encontrar la estrategia con mayor peso QUE HAYA VOTADO POR EL GANADOR
+        best_conf, best_method = -1.0, 'None'
+        for name, (action, conf) in signals.items():
+            if action == winner and conf > best_conf:
+                best_conf, best_method = conf, name
+
+        return winner, layer_conf, best_method
