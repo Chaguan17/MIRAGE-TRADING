@@ -17,7 +17,7 @@ export default defineConfig({
         theme_color: '#ffffff',
         icons: [
           {
-            src: 'https://cdn-icons-png.flaticon.com/512/2933/2933116.png', // Icono temporal
+            src: 'icon-512.png',
             sizes: '512x512',
             type: 'image/png'
           }

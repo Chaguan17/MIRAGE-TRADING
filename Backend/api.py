@@ -77,20 +77,33 @@ def read_root():
 def _fetch_dashboard_data():
     """Lógica centralizada para obtener métricas, usada por REST y WebSockets."""
     try:
-        importlib.reload(cfg)
+        # 1. Cargar configuración actual directamente del archivo para asegurar interactividad
+        current_config = {}
+        if os.path.exists(cfg.SETTINGS_PATH):
+            try:
+                with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    current_config = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading settings.json: {e}")
 
+        # 2. Cargar estado en vivo
         try:
             with open(cfg.LIVE_STATE_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError):
             logger.info("live_state.json not found, returning default data")
             data = {
                 "pnl_total": 0, "win_rate": 0, "total_operaciones": 0, "operaciones_activas": []
             }
 
-        # Sinergia: Enviamos los pares activos actuales para que el frontend ajuste sus WebSockets
-        # Normalización: Eliminamos espacios y forzamos mayúsculas para evitar fallos de coincidencia visual
-        data["pares_activos"] = [str(p).strip().upper() for p in getattr(cfg, "PARES_ACTIVOS", [])]
+        # 3. Inyectar configuración y balance para el Dashboard
+        data["config"] = current_config
+        
+        if "balance_actual" not in data or data["balance_actual"] == 0:
+            data["balance_actual"] = current_config.get("PAPER_BALANCE", 0)
+
+        # Sincronizar pares activos desde la configuración cargada
+        data["pares_activos"] = [str(p).strip().upper() for p in current_config.get("PARES_ACTIVOS", [])]
 
         # Cambio de fuente: Leer desde SQLite en lugar de CSV
         if os.path.exists(cfg.DB_PATH):
@@ -202,7 +215,6 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
     # Configuración de Flota y Horarios
     PARES_ACTIVOS: list[str] | None = None
     TIMEFRAME: str | None = None
-    PARES_ACTIVOS: list[str] | None = None
     SLEEP_START_HOUR: int | None = None
     SLEEP_START_MINUTE: int | None = None
     SLEEP_END_HOUR: int | None = None

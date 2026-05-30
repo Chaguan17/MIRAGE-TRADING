@@ -475,6 +475,18 @@ function Dashboard({
             color: liveTotalPnL >= 0 ? "#00ffaa" : "#ff3b69",
           },
           {
+            label: "Balance de Cuenta",
+            value: (data.balance_actual || 0).toLocaleString(undefined, { minimumFractionDigits: 2 }),
+            unit: "USDT",
+            color: "#00ffaa",
+          },
+          {
+            label: "Riesgo & Palanca",
+            value: `${((data.config?.RISK_PER_TRADE || 0) * 100).toFixed(1)}% / ${data.config?.LEVERAGE || 0}x`,
+            unit: "Config",
+            color: "#aa3bff",
+          },
+          {
             label: "Win Rate Algorítmico",
             value: `${data.win_rate}`,
             unit: "%",
