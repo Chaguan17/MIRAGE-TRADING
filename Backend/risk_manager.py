@@ -196,29 +196,31 @@ class RiskManager:
         return round(sl, 4), round(tp, 4)
 
     # ─── Trailing & Breakeven ────────────────────────────────────────────────
-
     def calculate_trailing_stop(self, trade, current_price, atr_value):
-        entry = trade['entry_price']
+        entry      = trade['entry_price']
         tp         = trade['tp']
         action     = trade['action']
         dist_total = abs(tp - entry)
-        
+
         if dist_total == 0:
             return None
-        
+
         dist_moved = (current_price - entry) if action == 'LONG' else (entry - current_price)
         if dist_moved < dist_total * config.TRAILING_STOP_ACTIVATION:
             return None
-        
+
         trail_dist = current_price * config.TRAILING_STOP_DISTANCE
+
         if action == 'LONG':
             new_sl = round(current_price - trail_dist, 4)
-        else:
-            new_sl = round(current_price + trail_dist, 4)
-        if trade['sl'] is None or new_sl < trade['sl']:
-            return new_sl
-        
+            if trade['sl'] is None or new_sl > trade['sl']:
+                return new_sl
+            else:
+                new_sl = round(current_price + trail_dist, 4)
+                if trade['sl'] is None or new_sl < trade['sl']:
+                    return new_sl
         return None
+
 
     def calculate_breakeven_stop(
         self,

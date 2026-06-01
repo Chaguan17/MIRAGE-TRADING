@@ -125,6 +125,14 @@ class MirageBinance:
             logger.warning(f"Error obteniendo balance: {e}")
             print(f"⚠️ Error obteniendo balance: {e}")
             return 0.0
+    def get_real_balance(self) -> float:
+        """Consulta el balance real de Binance siempre, independiente del modo paper."""
+        try:
+            balance = self.client.fetch_balance()
+            return float(balance.get('USDT', {}).get('total', 0))
+        except Exception as e:
+            logger.warning(f"No se pudo obtener balance real: {e}")
+            return 0.0
 
     # ── DATOS HISTÓRICOS ──────────────────────────────────────────
 

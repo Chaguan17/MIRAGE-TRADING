@@ -7,9 +7,9 @@ import logging
 import config
 import brain
 from binance_api import MirageBinance
-import data_engine
-import risk_manager
-import tracker
+import data_engine as data_engine
+import risk_manager as risk_manager
+import tracker as tracker
 from datetime import datetime, time as dtime
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 FILES_TO_WATCH = [
     'risk_manager.py', 'data_engine.py', 'config.py',
-    'tracker.py', 'brain.py', 'storage/settings.json'
+    'tracker.py', 'brain/__init__.py',
+    'storage/settings.json'
 ]
 
 
@@ -348,6 +349,10 @@ def main():
         try:
             wr_global = (web_wins_global / web_trades_global * 100) if web_trades_global > 0 else 0
             rm_status = {sym: bots[sym]['rm'].get_status_dict() for sym in pares_activos}
+
+            # ── AÑADIR: balance real de Binance ──────────────────────────────
+            real_balance = api.get_real_balance()
+
             estado = {
                 "pnl_total":           round(float(web_pnl_global), 2),
                 "win_rate":            round(float(wr_global), 1),
@@ -355,6 +360,7 @@ def main():
                 "operaciones_activas":web_operaciones_activas,
                 "balance_actual":     round(account_balance, 2),
                 "balance_inicial":    round(initial_balance, 2),
+                "balance_real":       round(real_balance, 2),
                 "risk_managers":      rm_status,
             }
             with open(config.LIVE_STATE_PATH, "w", encoding="utf-8") as f:

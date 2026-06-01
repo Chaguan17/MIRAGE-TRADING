@@ -28,9 +28,9 @@ const STYLES = {
   layout: {
     width: "100%",
     maxWidth: "1800px",
-    minHeight: "100vh",           // FIX: era maxHeight, cortaba el contenido
+    minHeight: "100vh", // FIX: era maxHeight, cortaba el contenido
     margin: "0 auto",
-    padding: "0 1.5rem 2rem",    // FIX: no tenía padding; el contenido iba de borde a borde
+    padding: "0 1.5rem 2rem", // FIX: no tenía padding; el contenido iba de borde a borde
     color: "#f8fafc",
     backgroundColor: "#060913",
     fontFamily: "Inter, system-ui, sans-serif",
@@ -43,7 +43,7 @@ const STYLES = {
     padding: "1.5rem 0",
     borderBottom: "1px solid #1e293b",
     marginBottom: "2rem",
-    flexWrap: "wrap",             // FIX: en móvil, los botones se van a la siguiente línea
+    flexWrap: "wrap", // FIX: en móvil, los botones se van a la siguiente línea
     gap: "1rem",
   },
   brandSection: { display: "flex", alignItems: "center", gap: "1rem" },
@@ -57,7 +57,7 @@ const STYLES = {
     boxShadow: "0 4px 15px rgba(170, 59, 255, 0.12)",
   },
   brandTitle: {
-    fontSize: "clamp(1.1rem, 4vw, 1.5rem)",  // FIX: responsivo
+    fontSize: "clamp(1.1rem, 4vw, 1.5rem)", // FIX: responsivo
     fontWeight: "900",
     letterSpacing: "-1px",
     margin: 0,
@@ -83,7 +83,7 @@ const STYLES = {
   headerButtons: {
     display: "flex",
     gap: "12px",
-    flexWrap: "wrap",             // FIX: en pantallas muy estrechas los botones se apilan
+    flexWrap: "wrap", // FIX: en pantallas muy estrechas los botones se apilan
   },
   btnSecondary: {
     background: "#0b1120",
@@ -130,7 +130,7 @@ const STYLES = {
   },
   kpiValue: (color) => ({
     fontFamily: "JetBrains Mono, monospace",
-    fontSize: "clamp(1.5rem, 5vw, 2.25rem)",  // FIX: responsivo
+    fontSize: "clamp(1.5rem, 5vw, 2.25rem)", // FIX: responsivo
     fontWeight: "700",
     margin: 0,
     color: color || "#f8fafc",
@@ -163,7 +163,12 @@ const STYLES = {
     fontSize: "0.85rem",
     color: "#f8fafc",
   },
-  pairStatDivider: { width: "1px", height: "20px", backgroundColor: "#1e293b", flexShrink: 0 },
+  pairStatDivider: {
+    width: "1px",
+    height: "20px",
+    backgroundColor: "#1e293b",
+    flexShrink: 0,
+  },
   pairStatDetails: {
     display: "flex",
     flexDirection: "column",
@@ -219,7 +224,7 @@ const STYLES = {
     marginTop: 0,
   },
   tableResponsive: {
-    overflowX: "auto",         // FIX: scroll horizontal en móvil
+    overflowX: "auto", // FIX: scroll horizontal en móvil
     width: "100%",
     WebkitOverflowScrolling: "touch",
   },
@@ -227,7 +232,7 @@ const STYLES = {
     width: "100%",
     borderCollapse: "collapse",
     textAlign: "left",
-    minWidth: "600px",          // FIX: tableLayout: "fixed" sin anchos definidos causaba columnas aplastadas
+    minWidth: "600px", // FIX: tableLayout: "fixed" sin anchos definidos causaba columnas aplastadas
   },
   th: (align = "left", color) => ({
     padding: "12px",
@@ -352,20 +357,24 @@ function Dashboard({
     if (!data) return 0;
     const closedPnl =
       data.pnl_total -
-      (data.operaciones_activas?.reduce((acc, op) => acc + (op.current_pnl || 0), 0) || 0);
+      (data.operaciones_activas?.reduce(
+        (acc, op) => acc + (op.current_pnl || 0),
+        0,
+      ) || 0);
 
-    const currentLive = data.operaciones_activas?.reduce((acc, op) => {
-      const price = livePrices[op.pair];
-      if (price) {
-        return (
-          acc +
-          (op.position_value || 0) *
-            (price / op.entry - 1) *
-            (op.type === "LONG" ? 1 : -1)
-        );
-      }
-      return acc + (op.current_pnl || 0);
-    }, 0) || 0;
+    const currentLive =
+      data.operaciones_activas?.reduce((acc, op) => {
+        const price = livePrices[op.pair];
+        if (price) {
+          return (
+            acc +
+            (op.position_value || 0) *
+              (price / op.entry - 1) *
+              (op.type === "LONG" ? 1 : -1)
+          );
+        }
+        return acc + (op.current_pnl || 0);
+      }, 0) || 0;
 
     return parseFloat((closedPnl + currentLive).toFixed(2));
   }, [data, livePrices]);
@@ -376,7 +385,7 @@ function Dashboard({
     const pairs = new Set(
       data.ultimas_operaciones
         .map((op) => op.pair)
-        .filter((p) => p && p !== "UNKNOWN")
+        .filter((p) => p && p !== "UNKNOWN"),
     );
     return Array.from(pairs).sort();
   }, [data]);
@@ -447,16 +456,36 @@ function Dashboard({
         </div>
 
         <div style={STYLES.headerButtons}>
-          <button onClick={() => navigate("/performance")} style={STYLES.btnSecondary}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <button
+            onClick={() => navigate("/performance")}
+            style={STYLES.btnSecondary}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <line x1="18" y1="20" x2="18" y2="10" />
               <line x1="12" y1="20" x2="12" y2="4" />
               <line x1="6" y1="20" x2="6" y2="14" />
             </svg>
             Métricas
           </button>
-          <button onClick={() => navigate("/settings")} style={STYLES.btnSecondary}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <button
+            onClick={() => navigate("/settings")}
+            style={STYLES.btnSecondary}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
@@ -475,10 +504,24 @@ function Dashboard({
             color: liveTotalPnL >= 0 ? "#00ffaa" : "#ff3b69",
           },
           {
-            label: "Balance de Cuenta",
-            value: (data.balance_actual || 0).toLocaleString(undefined, { minimumFractionDigits: 2 }),
+            label: "Balance Cuenta",
+            value: data.balance_actual
+              ? `${data.balance_actual.toFixed(2)}`
+              : "—",
             unit: "USDT",
-            color: "#00ffaa",
+            color:
+              data.balance_actual >= data.balance_inicial
+                ? "#00ffaa"
+                : "#ff3b69",
+          },
+          {
+            label: "Balance Binance Real",
+            value:
+              data.balance_real !== undefined && data.balance_real > 0
+                ? data.balance_real.toFixed(2)
+                : "Paper Mode",
+            unit: data.balance_real > 0 ? "USDT" : "",
+            color: "#f59e0b",
           },
           {
             label: "Riesgo & Palanca",
@@ -518,7 +561,9 @@ function Dashboard({
               <div style={STYLES.pairStatDivider} />
               <div style={STYLES.pairStatDetails}>
                 <span style={STYLES.pairStatWr(parseFloat(s.wr) >= 50)}>
-                  <div style={STYLES.dot(data.pares_activos?.includes(s.pair))} />
+                  <div
+                    style={STYLES.dot(data.pares_activos?.includes(s.pair))}
+                  />
                   {s.wr}%
                 </span>
                 <span style={STYLES.pairStatCount}>{s.total} Trades</span>
@@ -542,11 +587,23 @@ function Dashboard({
             >
               <defs>
                 <linearGradient id="colorPnL" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={chartColors.accent} stopOpacity={0.4} />
-                  <stop offset="95%" stopColor={chartColors.accent} stopOpacity={0.01} />
+                  <stop
+                    offset="5%"
+                    stopColor={chartColors.accent}
+                    stopOpacity={0.4}
+                  />
+                  <stop
+                    offset="95%"
+                    stopColor={chartColors.accent}
+                    stopOpacity={0.01}
+                  />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#1e293b" />
+              <CartesianGrid
+                strokeDasharray="4 4"
+                vertical={false}
+                stroke="#1e293b"
+              />
               <XAxis dataKey="time" hide />
               <YAxis
                 tick={{ fill: "#64748b", fontSize: 11, fontWeight: 600 }}
@@ -588,11 +645,28 @@ function Dashboard({
               <tr>
                 <th style={STYLES.th()}>Activo</th>
                 <th style={STYLES.th("center")}>Dirección</th>
-                <th style={{ ...STYLES.th("right"), ...{ className: "col-hide-sm" } }}>Monto</th>
+                <th
+                  style={{
+                    ...STYLES.th("right"),
+                    ...{ className: "col-hide-sm" },
+                  }}
+                >
+                  Monto
+                </th>
                 <th style={STYLES.th("right")}>Precio Entrada</th>
                 <th style={STYLES.th("right", "#aa3bff")}>Marca Actual</th>
-                <th style={{ ...STYLES.th("right", "#00ffaa") }} className="col-hide-sm">Take Profit</th>
-                <th style={{ ...STYLES.th("right", "#ff3b69") }} className="col-hide-sm">Stop Loss</th>
+                <th
+                  style={{ ...STYLES.th("right", "#00ffaa") }}
+                  className="col-hide-sm"
+                >
+                  Take Profit
+                </th>
+                <th
+                  style={{ ...STYLES.th("right", "#ff3b69") }}
+                  className="col-hide-sm"
+                >
+                  Stop Loss
+                </th>
                 <th style={STYLES.th("right")}>ROI</th>
                 <th style={STYLES.th("right")}>PnL Flotante</th>
               </tr>
@@ -612,7 +686,7 @@ function Dashboard({
                       (live / op.entry - 1) *
                       (op.type === "LONG" ? 1 : -1) *
                       (op.position_value || 0)
-                    ).toFixed(2)
+                    ).toFixed(2),
                   );
                   // FIX: roiPct era string comparado con número; ahora se parsea correctamente
                   const roiPct = parseFloat(
@@ -620,7 +694,7 @@ function Dashboard({
                       (live / op.entry - 1) *
                       (op.type === "LONG" ? 1 : -1) *
                       100
-                    ).toFixed(2)
+                    ).toFixed(2),
                   );
 
                   return (
@@ -629,22 +703,41 @@ function Dashboard({
                       <td style={STYLES.td("center")}>
                         <span style={STYLES.badge(op.type)}>{op.type}</span>
                       </td>
-                      <td style={STYLES.td("right", "400", "#f8fafc", true)} className="col-hide-sm">
-                        {op.position_value ? `$${op.position_value.toFixed(2)}` : "—"}
+                      <td
+                        style={STYLES.td("right", "400", "#f8fafc", true)}
+                        className="col-hide-sm"
+                      >
+                        {op.position_value
+                          ? `$${op.position_value.toFixed(2)}`
+                          : "—"}
                       </td>
                       <td style={STYLES.td("right", "400", "#f8fafc", true)}>
-                        {op.entry.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        {op.entry.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                        })}
                       </td>
                       <td style={STYLES.td("right", "700", "#aa3bff", true)}>
                         {live
-                          ? live.toLocaleString(undefined, { minimumFractionDigits: 2 })
+                          ? live.toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                            })
                           : "—"}
                       </td>
-                      <td style={STYLES.td("right", "400", "#00ffaa", true)} className="col-hide-sm">
+                      <td
+                        style={STYLES.td("right", "400", "#00ffaa", true)}
+                        className="col-hide-sm"
+                      >
                         {op.tp}
                       </td>
-                      <td style={STYLES.td("right", "400", "#f8fafc", true)} className="col-hide-sm">
-                        <span style={{ color: op.is_trailing ? "#f59e0b" : "#ff3b69" }}>
+                      <td
+                        style={STYLES.td("right", "400", "#f8fafc", true)}
+                        className="col-hide-sm"
+                      >
+                        <span
+                          style={{
+                            color: op.is_trailing ? "#f59e0b" : "#ff3b69",
+                          }}
+                        >
                           {op.sl === 0 ? "SIN SL" : op.sl}
                         </span>
                         {op.is_breakeven && (
@@ -654,12 +747,28 @@ function Dashboard({
                           <span style={STYLES.specialBadge("#f59e0b")}>TR</span>
                         )}
                       </td>
-                      <td style={STYLES.td("right", "700", roiPct >= 0 ? "#00ffaa" : "#ff3b69", true)}>
+                      <td
+                        style={STYLES.td(
+                          "right",
+                          "700",
+                          roiPct >= 0 ? "#00ffaa" : "#ff3b69",
+                          true,
+                        )}
+                      >
                         {/* FIX: antes roiPct era string → comparación siempre true */}
-                        {roiPct > 0 ? "+" : ""}{roiPct}%
+                        {roiPct > 0 ? "+" : ""}
+                        {roiPct}%
                       </td>
-                      <td style={STYLES.td("right", "700", livePnl >= 0 ? "#00ffaa" : "#ff3b69", true)}>
-                        {livePnl > 0 ? "+" : ""}{livePnl} USDT
+                      <td
+                        style={STYLES.td(
+                          "right",
+                          "700",
+                          livePnl >= 0 ? "#00ffaa" : "#ff3b69",
+                          true,
+                        )}
+                      >
+                        {livePnl > 0 ? "+" : ""}
+                        {livePnl} USDT
                       </td>
                     </tr>
                   );
@@ -707,7 +816,9 @@ function Dashboard({
                 <th style={STYLES.th()}>Activo</th>
                 <th style={STYLES.th()}>Lado</th>
                 <th style={STYLES.th("right")}>Entrada</th>
-                <th style={{ ...STYLES.th("right") }} className="col-hide-sm">Salida</th>
+                <th style={{ ...STYLES.th("right") }} className="col-hide-sm">
+                  Salida
+                </th>
                 <th style={STYLES.th("right")}>Resultado PnL</th>
               </tr>
             </thead>
@@ -721,13 +832,20 @@ function Dashboard({
               ) : (
                 filteredHistory.map((op, i) => (
                   <tr key={i}>
-                    <td style={STYLES.td("left", "400", "#64748b")}>{op.timestamp}</td>
+                    <td style={STYLES.td("left", "400", "#64748b")}>
+                      {op.timestamp}
+                    </td>
                     <td style={STYLES.td("left", "700")}>{op.pair}</td>
                     <td style={STYLES.td()}>
                       <span style={STYLES.badge(op.action)}>{op.action}</span>
                     </td>
-                    <td style={STYLES.td("right", "400", "#f8fafc", true)}>{op.entry_price}</td>
-                    <td style={STYLES.td("right", "400", "#f8fafc", true)} className="col-hide-sm">
+                    <td style={STYLES.td("right", "400", "#f8fafc", true)}>
+                      {op.entry_price}
+                    </td>
+                    <td
+                      style={STYLES.td("right", "400", "#f8fafc", true)}
+                      className="col-hide-sm"
+                    >
                       {op.close_price}
                     </td>
                     <td
@@ -735,10 +853,11 @@ function Dashboard({
                         "right",
                         "700",
                         op.pnl_usdt >= 0 ? "#00ffaa" : "#ff3b69",
-                        true
+                        true,
                       )}
                     >
-                      {op.pnl_usdt >= 0 ? "+" : ""}{op.pnl_usdt} USDT
+                      {op.pnl_usdt >= 0 ? "+" : ""}
+                      {op.pnl_usdt} USDT
                     </td>
                   </tr>
                 ))
@@ -762,10 +881,10 @@ export default function App() {
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const reconnectDelayRef = useRef(1000);
-  const unmountedRef = useRef(false);  // FIX: evita reconexión después del unmount
+  const unmountedRef = useRef(false); // FIX: evita reconexión después del unmount
 
   const connectWebSocket = (pairs = []) => {
-    if (unmountedRef.current) return;  // FIX: no reconectar si el componente fue desmontado
+    if (unmountedRef.current) return; // FIX: no reconectar si el componente fue desmontado
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
     const streams =
@@ -779,7 +898,10 @@ export default function App() {
       try {
         const msg = JSON.parse(e.data);
         if (msg.data?.s)
-          setLivePrices((p) => ({ ...p, [msg.data.s]: parseFloat(msg.data.c) }));
+          setLivePrices((p) => ({
+            ...p,
+            [msg.data.s]: parseFloat(msg.data.c),
+          }));
       } catch (_) {}
     };
 
@@ -788,10 +910,13 @@ export default function App() {
     };
 
     ws.onclose = () => {
-      if (unmountedRef.current) return;  // FIX: no reconectar tras cleanup
+      if (unmountedRef.current) return; // FIX: no reconectar tras cleanup
       const delay = Math.min(reconnectDelayRef.current, 30000);
       reconnectDelayRef.current = delay * 2;
-      reconnectTimeoutRef.current = setTimeout(() => connectWebSocket(pairs), delay);
+      reconnectTimeoutRef.current = setTimeout(
+        () => connectWebSocket(pairs),
+        delay,
+      );
     };
 
     wsRef.current = ws;
@@ -804,10 +929,15 @@ export default function App() {
         .then((res) => res.json())
         .then((d) => {
           if (d.error) setError(d.error);
-          else { setData(d); setError(null); }
+          else {
+            setData(d);
+            setError(null);
+          }
         })
         .catch(() =>
-          setError("Conexión perdida con el motor Mirage. Verifique el servidor backend.")
+          setError(
+            "Conexión perdida con el motor Mirage. Verifique el servidor backend.",
+          ),
         );
     };
     fetchD();
@@ -845,10 +975,18 @@ export default function App() {
             width: "100%",
           }}
         >
-          <h2 style={{ marginBottom: "12px", fontSize: "1.4rem", color: "#ff3b69" }}>
+          <h2
+            style={{
+              marginBottom: "12px",
+              fontSize: "1.4rem",
+              color: "#ff3b69",
+            }}
+          >
             ⚠️ Error Crítico de Sistema
           </h2>
-          <p style={{ color: "#f8fafc", fontSize: "0.95rem", margin: 0 }}>{error}</p>
+          <p style={{ color: "#f8fafc", fontSize: "0.95rem", margin: 0 }}>
+            {error}
+          </p>
         </div>
       </div>
     );

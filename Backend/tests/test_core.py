@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 import config
 from brain import MirageBrain
-from risk_manager import RiskManager
+from Backend.risk_manager import RiskManager
 
 
 # ══════════════════════════════════════════════════════════════

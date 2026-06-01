@@ -4,8 +4,8 @@ import logging
 import config as cfg
 import numpy as np
 from brain import MirageBrain
-from risk_manager import RiskManager
-from data_engine import DataEngine
+from Backend.risk_manager import RiskManager
+from Backend.data_engine import DataEngine
 
 logger = logging.getLogger(__name__)
 
