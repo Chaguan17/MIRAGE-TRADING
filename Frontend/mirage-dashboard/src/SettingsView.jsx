@@ -4,10 +4,7 @@ import { useNavigate } from "react-router-dom";
 const PAIR_PRESETS = [
   "BTCUSDT",
   "ETHUSDT",
-  "SOLUSDT",
   "BNBUSDT",
-  "XRPUSDT",
-  "LINKUSDT",
 ];
 
 const TIMEFRAME_PRESETS = ["1m", "5m", "15m", "1h", "4h", "1d"];
