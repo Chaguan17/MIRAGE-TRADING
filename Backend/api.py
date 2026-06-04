@@ -61,7 +61,7 @@ async def dashboard_broadcaster():
 if not os.path.exists(cfg.SETTINGS_PATH):
 	default_settings = {
 	"TIMEFRAME": "5m",
-	"PAPER_BALANCE": 1000.0,
+	"PAPER_BALANCE": 100.0,
 	"RISK_PER_TRADE": 0.01,
 	"MIN_CONFIDENCE": 0.65,
 	"LEVERAGE": 5

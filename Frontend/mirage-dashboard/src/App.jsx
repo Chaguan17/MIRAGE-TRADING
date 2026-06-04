@@ -507,7 +507,7 @@ function Dashboard({
             label: "Balance Cuenta",
             value: data.balance_actual
               ? `${data.balance_actual.toFixed(2)}`
-              : "—",
+              : "—", 
             unit: "USDT",
             color:
               data.balance_actual >= data.balance_inicial
@@ -519,7 +519,7 @@ function Dashboard({
             value:
               data.balance_real !== undefined && data.balance_real > 0
                 ? data.balance_real.toFixed(2)
-                : "Paper Mode",
+                : "0.00",
             unit: data.balance_real > 0 ? "USDT" : "",
             color: "#f59e0b",
           },
