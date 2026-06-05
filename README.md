@@ -11,7 +11,7 @@
 
 ---
 
-## MACRO — Visión General
+##  Visión General
 
 **Mirage Trading** es un sistema completo de trading algorítmico que opera en **Binance Futures** de forma autónoma. Combina **9 estrategias técnicas** con un motor de **Machine Learning adaptativo** que aprende de cada operación, gestionando el riesgo de forma dinámica según el capital disponible en tiempo real.
 
@@ -39,7 +39,7 @@ El sistema no depende de intervención humana. Analiza el mercado, toma decision
 
 ---
 
-## MESO — Arquitectura
+##  Arquitectura
 
 ### Flujo de decisión
 
@@ -110,7 +110,7 @@ MIRAGE-TRADING/
 
 ---
 
-## MICRO — Implementación Técnica
+##  Implementación Técnica
 
 ### 1. Consenso Multi-Capa con Detección de Conflictos
 
