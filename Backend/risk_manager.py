@@ -215,10 +215,10 @@ class RiskManager:
             new_sl = round(current_price - trail_dist, 4)
             if trade['sl'] is None or new_sl > trade['sl']:
                 return new_sl
-            else:
-                new_sl = round(current_price + trail_dist, 4)
-                if trade['sl'] is None or new_sl < trade['sl']:
-                    return new_sl
+        else:
+            new_sl = round(current_price + trail_dist, 4)
+            if trade['sl'] is None or new_sl < trade['sl']:
+                return new_sl
         return None
 
 
