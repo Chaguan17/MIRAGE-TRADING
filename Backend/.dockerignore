@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+storage/*.db
+storage/backups/
+storage/*.pkl
+storage/*.sha256
+storage/*.bak
+.env
+.git/
+*.log

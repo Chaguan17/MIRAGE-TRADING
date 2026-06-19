@@ -8,11 +8,25 @@ import sqlite3
 import logging
 import importlib
 import asyncio
+from contextlib import asynccontextmanager
 import config as cfg
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Mirage Trading API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Gestión del ciclo de vida: reemplaza los eventos startup/shutdown."""
+    # Tareas al iniciar
+    broadcaster_task = asyncio.create_task(dashboard_broadcaster())
+    yield
+    # Tareas al cerrar
+    broadcaster_task.cancel()
+    try:
+        await broadcaster_task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(title="Mirage Trading API", lifespan=lifespan)
 
 allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
@@ -45,16 +59,12 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-@app.on_event("startup")
-async def startup_event():
-	"""Inicia el broadcaster en segundo plano al arrancar la API."""
-	asyncio.create_task(dashboard_broadcaster())
-
 async def dashboard_broadcaster():
 	"""Ciclo centralizado que hace push de actualizaciones cada 2 segundos."""
 	while True:
 		if manager.active_connections:
-			payload = _fetch_dashboard_data()
+            # Ejecutamos la carga de datos (síncrona) en un hilo aparte para no bloquear
+			payload = await asyncio.to_thread(_fetch_dashboard_data)
 			await manager.broadcast(payload)
 		await asyncio.sleep(2)
 
@@ -103,7 +113,8 @@ def _fetch_dashboard_data():
 			data["balance_actual"] = current_config.get("PAPER_BALANCE", 0)
 
 		# Sincronizar pares activos desde la configuración cargada
-		data["pares_activos"] = [str(p).strip().upper() for p in current_config.get("PARES_ACTIVOS", [])]
+		pares_cfg = current_config.get("PARES_ACTIVOS", cfg.PARES_ACTIVOS)
+		data["pares_activos"] = [str(p).strip().upper() for p in pares_cfg]
 
 		# Cambio de fuente: Leer desde SQLite en lugar de CSV
 		if os.path.exists(cfg.DB_PATH):

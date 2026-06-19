@@ -12,14 +12,22 @@ class DataEngine:
         df = df.copy()
 
         # ── 1. TENDENCIA ────────────────────────────────────────────────────
-        df['EMA_20']        = ta.ema(df['close'], length=20)
-        df['EMA_50']        = ta.ema(df['close'], length=50)
-        df['EMA_200']       = ta.ema(df['close'], length=200)
+        ema20 = ta.ema(df['close'], length=20)
+        df['EMA_20'] = ema20 if ema20 is not None else pd.Series(np.nan, index=df.index)
+        
+        ema50 = ta.ema(df['close'], length=50)
+        df['EMA_50'] = ema50 if ema50 is not None else pd.Series(np.nan, index=df.index)
+        
+        ema200 = ta.ema(df['close'], length=200)
+        df['EMA_200'] = ema200 if ema200 is not None else pd.Series(np.nan, index=df.index)
+        
         df['EMA_diff']      = df['EMA_20'] - df['EMA_50']
         df['EMA_diff_norm'] = df['EMA_diff'] / (df['close'] * 0.001 + 1e-9)
 
         # ── 2. MOMENTUM ─────────────────────────────────────────────────────
-        df['RSI']  = ta.rsi(df['close'], length=14)
+        rsi = ta.rsi(df['close'], length=14)
+        df['RSI'] = rsi if rsi is not None else pd.Series(np.nan, index=df.index)
+        
         macd_df    = ta.macd(df['close'], fast=12, slow=26, signal=9)
         if macd_df is not None and not macd_df.empty:
             df['MACD']        = macd_df.iloc[:, 0]
@@ -29,11 +37,13 @@ class DataEngine:
             df['MACD'] = df['MACD_signal'] = df['MACD_hist'] = 0
 
         # ── 3. VOLATILIDAD ──────────────────────────────────────────────────
-        df['ATR']     = ta.atr(df['high'], df['low'], df['close'], length=14)
+        atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+        df['ATR'] = atr if atr is not None else pd.Series(np.nan, index=df.index)
         df['ATR_pct'] = df['ATR'] / df['close'] * 100
 
         bbands = ta.bbands(df['close'], length=20, std=2.0)
-        df = pd.concat([df, bbands], axis=1)
+        if bbands is not None:
+            df = pd.concat([df, bbands], axis=1)
 
         if self._bb_upper_col is None:
             for u, l in [
@@ -52,7 +62,8 @@ class DataEngine:
             df['BB_position'] = (df['close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'] + 1e-9)
 
         # ── 4. VOLUMEN ──────────────────────────────────────────────────────
-        df['volume_ma']    = ta.ema(df['volume'], length=20)
+        volume_ma = ta.ema(df['volume'], length=20)
+        df['volume_ma'] = volume_ma if volume_ma is not None else pd.Series(np.nan, index=df.index)
         df['volume_ratio'] = df['volume'] / (df['volume_ma'] + 1e-9)
 
         # ── 5. SEÑALES BINARIAS ──────────────────────────────────────────────

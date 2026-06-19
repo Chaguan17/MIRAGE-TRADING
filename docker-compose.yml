@@ -1,0 +1,56 @@
+services:
+
+  # ── Bot de trading (loop principal, main.py) ───────────────────
+  mirage-bot:
+    build:
+      context: .
+      dockerfile: Backend/Dockerfile
+    container_name: mirage-bot
+    command: python main.py
+    env_file:
+      - ./Backend/.env
+    volumes:
+      - ./Backend/storage:/app/storage
+    restart: unless-stopped
+    networks:
+      - mirage-net
+
+  # ── API REST + WebSocket (api.py) ──────────────────────────────
+  mirage-api:
+    build:
+      context: .
+      dockerfile: Backend/Dockerfile
+    container_name: mirage-api
+    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    env_file:
+      - ./Backend/.env
+    environment:
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:5174
+    volumes:
+      - ./Backend/storage:/app/storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mirage-bot
+    restart: unless-stopped
+    networks:
+      - mirage-net
+
+  # ── Dashboard (React build servido con Nginx) ──────────────────
+  mirage-frontend:
+    build:
+      context: ./Frontend/mirage-dashboard
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: mirage-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - mirage-api
+    restart: unless-stopped
+    networks:
+      - mirage-net
+
+networks:
+  mirage-net:
+    driver: bridge

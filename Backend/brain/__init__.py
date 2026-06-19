@@ -47,6 +47,22 @@ class MirageBrain:
     @property
     def scaler(self): return self.features.scaler
 
+    @property
+    def MIN_TRADES_FOR_AI(self): return self.cfg.MIN_TRADES_FOR_AI
+
+    @property
+    def MAX_AI_WEIGHT(self): return self.cfg.AI_MAX_WEIGHT
+
+    def _ai_weight(self):
+        return self.ml.calculate_ai_weight(self.trades_seen)
+
+    def _build_X(self, features_dict):
+        return self.features.build_X(features_dict)
+
+    def _predict_use_sl(self, X):
+        Xs = self.features.scale(X)
+        return self.ml.predict_use_sl(Xs, self.trades_seen)
+
     def _count_historical_trades(self):
         try:
             if os.path.exists(self.cfg.DB_PATH):

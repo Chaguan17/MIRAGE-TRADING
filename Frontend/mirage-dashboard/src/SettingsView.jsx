@@ -5,6 +5,11 @@ const PAIR_PRESETS = [
   "BTCUSDT",
   "ETHUSDT",
   "BNBUSDT",
+  "SOLUSDT",
+  "HBARUSDT",
+  "XRPUSDT",
+  "ADAUSDT",
+  "LINKUSDT"
 ];
 
 const TIMEFRAME_PRESETS = ["1m", "5m", "15m", "1h", "4h", "1d"];
@@ -253,6 +258,8 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
   const isNumeric = !isArray && !isSelect && !isText && !isBoolean;
 
   // ✅ FIX DISPLAY VALUE
+  const [customPair, setCustomPair] = useState("");
+
   const displayValue = useMemo(() => {
     if (!isNumeric) return rawValue;
 
@@ -360,29 +367,74 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
   if (isArray) {
     const currentArray = Array.isArray(rawValue) ? rawValue : [];
 
-    const togglePair = (pair) => {
-      const next = currentArray.includes(pair)
-        ? currentArray.filter((p) => p !== pair)
-        : [...currentArray, pair];
-
+    const addPair = (pair) => {
+      const sym = pair.toUpperCase().trim();
+      if (!sym || currentArray.includes(sym)) return;
+      
       setConfig((prev) => ({
         ...prev,
-        [paramKey]: next,
+        [paramKey]: [...currentArray, sym],
+      }));
+      setCustomPair("");
+    };
+
+    const removePair = (pair) => {
+      setConfig((prev) => ({
+        ...prev,
+        [paramKey]: currentArray.filter((p) => p !== pair),
       }));
     };
 
     return (
       <div style={S.formGroup}>
         <label style={S.label}>{param.label}</label>
+        <p style={S.desc}>Pares que el bot monitorea. Añade nuevos o quita los activos.</p>
+        
+        {/* Tags de pares activos */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
+          {currentArray.map((p) => (
+            <div key={p} style={{
+              background: "#aa3bff",
+              color: "white",
+              padding: "5px 10px",
+              borderRadius: "8px",
+              fontSize: "0.8rem",
+              fontWeight: "800",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              border: "1px solid rgba(255,255,255,0.2)"
+            }}>
+              {p}
+              <span 
+                onClick={() => removePair(p)} 
+                style={{ cursor: "pointer", fontSize: "1.1rem", lineHeight: 1 }}
+              >×</span>
+            </div>
+          ))}
+        </div>
 
+        {/* Entrada manual */}
+        <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+          <input 
+            type="text" 
+            placeholder="EJ: HBARUSDT"
+            value={customPair}
+            onChange={(e) => setCustomPair(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addPair(customPair)}
+            style={{ ...S.input, flex: 1 }}
+          />
+          <button 
+            type="button" 
+            onClick={() => addPair(customPair)}
+            style={{ ...S.presetBtn(true), padding: "0 15px" }}
+          >+ Añadir</button>
+        </div>
+
+        {/* Sugerencias */}
         <div style={S.presetContainer}>
-          {PAIR_PRESETS.map((pair) => (
-            <button
-              key={pair}
-              type="button"
-              onClick={() => togglePair(pair)}
-              style={S.presetBtn(currentArray.includes(pair))}
-            >
+          {PAIR_PRESETS.filter(p => !currentArray.includes(p)).map((pair) => (
+            <button key={pair} type="button" onClick={() => addPair(pair)} style={S.presetBtn(false)}>
               {pair}
             </button>
           ))}
