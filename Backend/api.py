@@ -113,7 +113,8 @@ def _fetch_dashboard_data():
 			data["balance_actual"] = current_config.get("PAPER_BALANCE", 0)
 
 		# Sincronizar pares activos desde la configuración cargada
-		data["pares_activos"] = [str(p).strip().upper() for p in current_config.get("PARES_ACTIVOS", [])]
+		pares_cfg = current_config.get("PARES_ACTIVOS", cfg.PARES_ACTIVOS)
+		data["pares_activos"] = [str(p).strip().upper() for p in pares_cfg]
 
 		# Cambio de fuente: Leer desde SQLite en lugar de CSV
 		if os.path.exists(cfg.DB_PATH):

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 import config
 from brain import MirageBrain
-from Backend.risk_manager import RiskManager
+from risk_manager import RiskManager
 
 
 # ══════════════════════════════════════════════════════════════
@@ -39,7 +39,7 @@ class TestConfig:
 
     def test_clamp_leverage_limita_exceso(self):
         """clamp_leverage debe bajar cualquier valor > MAX a MAX."""
-        resultado = config.clamp_leverage(10)
+        resultado = config.clamp_leverage(30)
         assert resultado == config.MAX_LEVERAGE_ALLOWED
 
     def test_clamp_leverage_respeta_valor_valido(self):

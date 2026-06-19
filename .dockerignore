@@ -1,0 +1,9 @@
+.git/
+.venv/
+venv/
+node_modules/
+Frontend/
+Backend/storage/
+Backend/logs/
+Backend/__pycache__/
+Backend/**/*.pyc

@@ -381,12 +381,21 @@ function Dashboard({
 
   // FIX: lista de pares dinámica extraída del historial real (no hardcodeada)
   const availablePairs = useMemo(() => {
-    if (!data?.ultimas_operaciones) return [];
-    const pairs = new Set(
-      data.ultimas_operaciones
-        .map((op) => op.pair)
-        .filter((p) => p && p !== "UNKNOWN"),
-    );
+    if (!data) return [];
+    const pairs = new Set();
+
+    // Incluir pares del historial
+    if (data.ultimas_operaciones) {
+      data.ultimas_operaciones.forEach((op) => {
+        if (op.pair && op.pair !== "UNKNOWN") pairs.add(op.pair);
+      });
+    }
+
+    // Incluir pares activos configurados actualmente
+    if (data.pares_activos) {
+      data.pares_activos.forEach((p) => pairs.add(p));
+    }
+
     return Array.from(pairs).sort();
   }, [data]);
 
@@ -399,14 +408,26 @@ function Dashboard({
   }, [data, historyFilter, historyLimit]);
 
   const pairStats = useMemo(() => {
-    if (!data?.ultimas_operaciones) return [];
+    if (!data) return [];
     const stats = {};
+
+    // Inicializar con los pares que el bot está monitoreando activamente
+    if (data.pares_activos) {
+      data.pares_activos.forEach((p) => {
+        stats[p] = { wins: 0, total: 0 };
+      });
+    }
+
+    // Llenar con datos del historial real
+    if (data.ultimas_operaciones) {
     data.ultimas_operaciones.forEach((op) => {
       if (!op.pair || op.pair === "UNKNOWN") return;
       if (!stats[op.pair]) stats[op.pair] = { wins: 0, total: 0 };
       stats[op.pair].total += 1;
       if (op.pnl_usdt > 0) stats[op.pair].wins += 1;
     });
+    }
+
     return Object.entries(stats)
       .map(([pair, s]) => ({
         pair,
