@@ -1,7 +1,0 @@
-{
-  "dependencies": {
-    "lucide-react": "^1.16.0",
-    "react-router-dom": "^7.15.0",
-    "recharts": "^3.8.1"
-  }
-}

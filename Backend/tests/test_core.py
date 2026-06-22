@@ -1,8 +1,8 @@
 """
-Tests básicos para Mirage Trading — Tarea Inmediata 1.2
+Tests básicos para Mirage Trading
 
 Cómo ejecutar:
-    cd Backend
+    cd backend
     pytest tests/test_core.py -v
 
 Requisitos:
@@ -14,16 +14,11 @@ Cobertura:
     - risk_manager.py → position sizing, stops, rachas
 """
 
-import sys
-import os
-
-# Permite importar desde Backend/ sin instalar como paquete
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import pytest
 import config
 from brain import MirageBrain
 from risk_manager import RiskManager
+
 
 
 # ══════════════════════════════════════════════════════════════

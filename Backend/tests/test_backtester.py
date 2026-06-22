@@ -1,13 +1,9 @@
 import pytest
 import pandas as pd
-import os
-import sys
-
-# Asegurar que Python encuentre los módulos del Backend
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from backtester import SimpleBacktester
+
 
 def test_backtester_initialization():
     """Verifica que el backtester se instancia correctamente con datos mínimos."""

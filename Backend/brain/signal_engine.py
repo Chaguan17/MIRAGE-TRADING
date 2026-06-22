@@ -1,5 +1,5 @@
 # brain/signal_engine.py
-from methods import (
+from strategies import (
     trend_follower, mean_reversion, breakout_logic,
     smc_structure, vwap_method, liquidity_zones,
     orderflow, wyckoff, btc_correlation,

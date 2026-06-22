@@ -221,6 +221,7 @@ def main():
 
                 b["consecutive_errors"] = 0
                 current_price = features.iloc[-1]["close"]
+                b["last_price"] = current_price
                 last_row = features.iloc[-1].to_dict()
                 atr_current = last_row.get("ATR", 0)
 
@@ -269,29 +270,6 @@ def main():
 
                 with b["tr"]._trades_lock:
                     active_trades_snapshot = list(b["tr"].active_trades)
-
-                for t in active_trades_snapshot:
-                    fpnl = (
-                        (current_price - t["entry_price"]) * t["size"]
-                        if t["action"] == "LONG"
-                        else (t["entry_price"] - current_price) * t["size"]
-                    )
-                    web_operaciones_activas.append(
-                        {
-                            "pair": sym,
-                            "current_price": round(current_price, 2),
-                            "type": t["action"],
-                            "entry": round(t["entry_price"], 4),
-                            "tp": round(t["tp"], 4) if t["tp"] else 0,
-                            "sl": round(t["sl"], 4) if t["sl"] else 0,
-                            "current_pnl": round(fpnl, 2),
-                            "is_trailing": t.get("is_trailing", False),
-                            "is_breakeven": t.get("is_breakeven", False),
-                            "size": t.get("size", 0),
-                            "position_value": t.get("size", 0)
-                            * t.get("entry_price", 0),
-                        }
-                    )
 
                 # ── Scale-In (DCA) ────────────────────────────────────────────
                 if 0 < len(active_trades_snapshot) < config.MAX_BULLETS:
@@ -420,16 +398,56 @@ def main():
 
             # ── AÑADIR: balance real de Binance ──────────────────────────────
             real_balance = api.get_real_balance()
+            
+            tracker_stats = {
+                sym: {
+                    "total": bots[sym]["tr"].total_trades,
+                    "wins": bots[sym]["tr"].wins,
+                    "losses": bots[sym]["tr"].losses,
+                    "win_rate": round(bots[sym]["tr"].win_rate, 1),
+                    "pnl": round(bots[sym]["tr"].total_pnl, 2),
+                } for sym in pares_activos
+            }
+
+            # ── Reconstrucción segura de operaciones activas ─────────────────
+            web_operaciones_activas_safe = []
+            for sym in pares_activos:
+                b = bots[sym]
+                with b["tr"]._trades_lock:
+                    active_trades_snapshot = list(b["tr"].active_trades)
+                
+                curr_price = b.get("last_price", 0)
+                
+                for t in active_trades_snapshot:
+                    if curr_price > 0:
+                        fpnl = (curr_price - t["entry_price"]) * t["size"] if t["action"] == "LONG" else (t["entry_price"] - curr_price) * t["size"]
+                    else:
+                        fpnl = 0
+                        
+                    web_operaciones_activas_safe.append({
+                        "pair": sym,
+                        "current_price": round(curr_price, 2),
+                        "type": t["action"],
+                        "entry": round(t["entry_price"], 4),
+                        "tp": round(t["tp"], 4) if t["tp"] else 0,
+                        "sl": round(t["sl"], 4) if t["sl"] else 0,
+                        "current_pnl": round(fpnl, 2),
+                        "is_trailing": t.get("is_trailing", False),
+                        "is_breakeven": t.get("is_breakeven", False),
+                        "size": t.get("size", 0),
+                        "position_value": t.get("size", 0) * t.get("entry_price", 0),
+                    })
 
             estado = {
                 "pnl_total": round(float(web_pnl_global), 2),
                 "win_rate": round(float(wr_global), 1),
                 "total_operaciones": int(web_trades_global),
-                "operaciones_activas": web_operaciones_activas,
+                "operaciones_activas": web_operaciones_activas_safe,
                 "balance_actual": round(account_balance, 2),
                 "balance_inicial": round(initial_balance, 2),
                 "balance_real": round(real_balance, 2),
                 "risk_managers": rm_status,
+                "tracker_stats": tracker_stats,
             }
             with open(config.LIVE_STATE_PATH, "w", encoding="utf-8") as f:
                 json.dump(estado, f)

@@ -1,13 +1,45 @@
-# Secretos y Configuración
+# ═══════════════════════════════════════════════════════════
+# MIRAGE-TRADING — .gitignore
+# ═══════════════════════════════════════════════════════════
+
+# ── Secrets ──────────────────────────────────────────────
 .env
+*.env.local
 
-# Datos y Memoria (No los subimos porque el servidor generará los suyos)
-storage/
-trade_history.csv
-*.pkl
-
-# Python
+# ── Python ───────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-venv/
+*.pyo
 .venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# ── Runtime data ─────────────────────────────────────────
+backend/storage/
+backend/logs/
+*.pkl
+trade_history.csv
+
+# ── Node ─────────────────────────────────────────────────
+node_modules/
+
+# ── IDE ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Testing ──────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── OS ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Docker ───────────────────────────────────────────────
+*.log

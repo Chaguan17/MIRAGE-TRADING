@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY Backend/ .
+COPY backend/ .
 
 # El comando real se define en docker-compose (bot vs api)
 CMD ["python", "main.py"]
