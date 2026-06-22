@@ -57,6 +57,21 @@ class TradeTracker:
                            or col in self.FEATURE_COLS) else "TEXT"
             cols.append(f"{col} {t}")
         cursor.execute(f"CREATE TABLE IF NOT EXISTS trades ({', '.join(cols)})")
+        
+        # Migración automática: Añadir columnas que falten en el esquema existente
+        cursor.execute("PRAGMA table_info(trades)")
+        existing_cols = [row[1] for row in cursor.fetchall()]
+        
+        for col in self.COLUMNAS:
+            if col not in existing_cols:
+                t = "REAL" if (col in ['size', 'entry_price', 'close_price', 'pnl_usdt']
+                               or col in self.FEATURE_COLS) else "TEXT"
+                try:
+                    cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {t} DEFAULT 0")
+                    logger.info(f"🔄 Migración BD: Columna '{col}' añadida a la tabla trades.")
+                except Exception as e:
+                    logger.error(f"Error añadiendo columna {col}: {e}")
+                    
         conn.commit()
         conn.close()
 

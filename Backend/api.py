@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Mirage Trading API", lifespan=lifespan)
 
-allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,http://localhost:3000").split(",")
 app.add_middleware(
 	CORSMiddleware,
 	allow_origins=allowed_origins,
@@ -84,8 +84,16 @@ if not os.path.exists(cfg.SETTINGS_PATH):
 def read_root():
 	return {"status": "online", "bot": "Mirage Trading"}
 
+_LAST_LIVE_STATE = {
+	"pnl_total": 0, "win_rate": 0, "total_operaciones": 0, "operaciones_activas": []
+}
+_LAST_HISTORY_STATE = {
+	"chart_data": [], "ultimas_operaciones": []
+}
+
 def _fetch_dashboard_data():
 	"""Lógica centralizada para obtener métricas, usada por REST y WebSockets."""
+	global _LAST_LIVE_STATE, _LAST_HISTORY_STATE
 	try:
 		# 1. Cargar configuración actual directamente del archivo para asegurar interactividad
 		current_config = {}
@@ -100,11 +108,9 @@ def _fetch_dashboard_data():
 		try:
 			with open(cfg.LIVE_STATE_PATH, "r", encoding="utf-8") as f:
 				data = json.load(f)
+				_LAST_LIVE_STATE = data
 		except (FileNotFoundError, json.JSONDecodeError):
-			logger.info("live_state.json not found, returning default data")
-			data = {
-				"pnl_total": 0, "win_rate": 0, "total_operaciones": 0, "operaciones_activas": []
-			}
+			data = _LAST_LIVE_STATE.copy()
 
 		# 3. Inyectar configuración y balance para el Dashboard
 		data["config"] = current_config
@@ -119,7 +125,7 @@ def _fetch_dashboard_data():
 		# Cambio de fuente: Leer desde SQLite en lugar de CSV
 		if os.path.exists(cfg.DB_PATH):
 			try:
-				conn = sqlite3.connect(cfg.DB_PATH)
+				conn = sqlite3.connect(cfg.DB_PATH, timeout=5.0) # Añadido timeout para mitigar bloqueos
 				# Filtramos UNKNOWN y limitamos para no saturar el JSON si el historial crece mucho
 				query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' ORDER BY timestamp ASC"
 				df = pd.read_sql(query, conn)
@@ -131,13 +137,14 @@ def _fetch_dashboard_data():
 						columns={'pnl_acumulado': 'pnl', 'timestamp': 'time'}
 					).to_dict(orient="records")
 					data["ultimas_operaciones"] = df.tail(100).to_dict(orient="records")
+					_LAST_HISTORY_STATE = {"chart_data": data["chart_data"], "ultimas_operaciones": data["ultimas_operaciones"]}
 				else:
 					data["chart_data"] = []
 					data["ultimas_operaciones"] = []
 			except Exception as e:
 				logger.error(f"Error reading history from DB: {e}")
-				data["chart_data"] = []
-				data["ultimas_operaciones"] = []
+				data["chart_data"] = _LAST_HISTORY_STATE["chart_data"]
+				data["ultimas_operaciones"] = _LAST_HISTORY_STATE["ultimas_operaciones"]
 		else:
 			data["chart_data"] = []
 			data["ultimas_operaciones"] = []
