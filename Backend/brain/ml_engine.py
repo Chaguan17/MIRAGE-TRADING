@@ -3,7 +3,8 @@ import joblib
 import logging
 import hashlib
 import shutil
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
+from xgboost import XGBClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +58,26 @@ class MLEngine:
         return self._new_model()
 
     def _new_model(self):
-        return RandomForestClassifier(
+        rf = RandomForestClassifier(
             n_estimators=self.config.AI_BASE_ESTIMATORS,
             max_depth=6,
             min_samples_leaf=5,
             class_weight='balanced_subsample',
             random_state=self.config.RANDOM_STATE,
             warm_start=False,
-            n_jobs= 1
+            n_jobs=1
+        )
+        xgb = XGBClassifier(
+            n_estimators=self.config.AI_BASE_ESTIMATORS,
+            max_depth=4,
+            learning_rate=0.05,
+            random_state=self.config.RANDOM_STATE,
+            n_jobs=1,
+            eval_metric="logloss"
+        )
+        return VotingClassifier(
+            estimators=[('rf', rf), ('xgb', xgb)],
+            voting='soft'
         )
 
     # ── Predicciones ─────────────────────────────────────────────────────────

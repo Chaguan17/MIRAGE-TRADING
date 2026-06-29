@@ -7,9 +7,58 @@ class DataEngine:
     def __init__(self):
         self._bb_upper_col = None
         self._bb_lower_col = None
+        self._fng_cache = None
+        self._fng_last_fetch = 0
+        
+    def _get_fear_and_greed(self):
+        import time
+        import requests
+        now = time.time()
+        if self._fng_cache is None or (now - self._fng_last_fetch) > 3600 * 12:
+            try:
+                r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
+                data = r.json()
+                val = int(data['data'][0]['value'])
+                self._fng_cache = val
+                self._fng_last_fetch = now
+            except Exception:
+                if self._fng_cache is None:
+                    self._fng_cache = 50
+        return self._fng_cache
 
-    def prepare_features(self, df):
+    def prepare_features(self, df, df_1h=None, df_4h=None):
         df = df.copy()
+
+        # ── 0. MULTI-TIMEFRAME (MTF) ────────────────────────────────────────
+        df['MTF_1h_trend'] = 0
+        df['MTF_4h_trend'] = 0
+        
+        if 'timestamp' in df.columns:
+            df_sorted = df.sort_values('timestamp')
+            
+            if df_1h is not None and not df_1h.empty and 'timestamp' in df_1h.columns:
+                ema50_1h = ta.ema(df_1h['close'], length=50)
+                if ema50_1h is not None:
+                    df_1h_temp = pd.DataFrame({'EMA50_1h': ema50_1h})
+                    df_1h_temp['timestamp'] = df_1h['timestamp']
+                    df_1h_temp = df_1h_temp.dropna().sort_values('timestamp')
+                    if not df_1h_temp.empty:
+                        df_sorted = pd.merge_asof(df_sorted, df_1h_temp, on='timestamp', direction='backward')
+                        df_sorted['MTF_1h_trend'] = (df_sorted['close'] > df_sorted['EMA50_1h']).astype(int)
+                        df_sorted = df_sorted.drop(columns=['EMA50_1h'])
+
+            if df_4h is not None and not df_4h.empty and 'timestamp' in df_4h.columns:
+                ema50_4h = ta.ema(df_4h['close'], length=50)
+                if ema50_4h is not None:
+                    df_4h_temp = pd.DataFrame({'EMA50_4h': ema50_4h})
+                    df_4h_temp['timestamp'] = df_4h['timestamp']
+                    df_4h_temp = df_4h_temp.dropna().sort_values('timestamp')
+                    if not df_4h_temp.empty:
+                        df_sorted = pd.merge_asof(df_sorted, df_4h_temp, on='timestamp', direction='backward')
+                        df_sorted['MTF_4h_trend'] = (df_sorted['close'] > df_sorted['EMA50_4h']).astype(int)
+                        df_sorted = df_sorted.drop(columns=['EMA50_4h'])
+                        
+            df = df_sorted.sort_index()
 
         # ── 1. TENDENCIA ────────────────────────────────────────────────────
         ema20 = ta.ema(df['close'], length=20)
@@ -35,6 +84,15 @@ class DataEngine:
             df['MACD_hist']   = macd_df.iloc[:, 2]
         else:
             df['MACD'] = df['MACD_signal'] = df['MACD_hist'] = 0
+
+        # ── 7. ALTERNATIVE DATA (Institucional) ─────────────────────────────
+        if 'funding_rate' not in df.columns:
+            df['funding_rate'] = 0.0
+        df['funding_rate'] = df['funding_rate'].fillna(0.0)
+        df['fear_and_greed'] = self._get_fear_and_greed()
+
+        # ── LIMPIEZA FINAL ──────────────────────────────────────────────────
+        df = df.replace([np.inf, -np.inf], np.nan)
 
         # ── 3. VOLATILIDAD ──────────────────────────────────────────────────
         atr = ta.atr(df['high'], df['low'], df['close'], length=14)
@@ -116,4 +174,5 @@ class DataEngine:
             'delta_cum5', 'delta_div',
             'price_slope', 'range_pct',
             'near_struct_high', 'near_struct_low',
+            'funding_rate', 'fear_and_greed',
         ]

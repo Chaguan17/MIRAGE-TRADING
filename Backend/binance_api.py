@@ -106,6 +106,34 @@ class MirageBinance:
             print(f"❌ Error de API: {e}")
             return False
 
+    def setup_symbol(self, symbol: str, leverage: int):
+        """
+        Configura el símbolo para usar Margen Aislado y el apalancamiento deseado.
+        """
+        if self.paper_trading:
+            print(f"🛡️ [PAPER] {symbol} configurado (simulado) a ISOLATED margin, {leverage}x leverage")
+            return True
+            
+        try:
+            # CCXT maneja la conversión si se requiere
+            try:
+                self.client.set_margin_mode('isolated', symbol)
+                logger.info(f"✅ {symbol}: Margen cambiado a ISOLATED")
+            except Exception as e:
+                if "No need to change" not in str(e):
+                    logger.warning(f"⚠️ {symbol}: Error al cambiar margin_type: {e}")
+                    
+            try:
+                self.client.set_leverage(leverage, symbol)
+                logger.info(f"✅ {symbol}: Apalancamiento ajustado a {leverage}x")
+            except Exception as e:
+                logger.warning(f"⚠️ {symbol}: Error al ajustar leverage: {e}")
+                
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error en setup_symbol para {symbol}: {e}")
+            return False
+
     # ── BALANCE ───────────────────────────────────────────────────
 
     def get_balance(self):

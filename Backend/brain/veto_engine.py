@@ -32,6 +32,36 @@ class VetoEngine:
         
         return None
 
+    def check_macro_crash(self, btc_features_df):
+        """Revisa si BTC ha tenido una caída brusca en la última hora."""
+        if btc_features_df is None or len(btc_features_df) < 2:
+            return None
+            
+        # Determinar cuántas velas hay en 1 hora según TIMEFRAME
+        tf = getattr(self.cfg, 'TIMEFRAME', '5m')
+        if tf.endswith('m'):
+            mins = int(tf.replace('m', ''))
+            candles_1h = max(2, int(60 / mins))
+        elif tf.endswith('h'):
+            candles_1h = max(2, int(1 / int(tf.replace('h', ''))))
+        else:
+            candles_1h = 4
+            
+        if len(btc_features_df) < candles_1h:
+            return None
+            
+        recent_closes = btc_features_df['close'].iloc[-candles_1h:].values
+        start_price = recent_closes[0]
+        end_price = recent_closes[-1]
+        
+        drop_pct = (start_price - end_price) / start_price
+        
+        if drop_pct >= self.cfg.VETO_CRASH_PCT:
+            logger.warning(f"🚨 MACRO VETO: BTC ha caído un {drop_pct:.2%} en la última hora. Pausando LONGs en {self.symbol}.")
+            return 'BTC Crash Veto'
+            
+        return None
+
     def check_ai_veto(self, ai_weight, ai_conf):
         """Veto si la IA detecta baja probabilidad a pesar del consenso técnico."""
         if ai_weight > 0.1 and ai_conf < 0.40:

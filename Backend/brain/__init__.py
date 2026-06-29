@@ -98,8 +98,23 @@ class MirageBrain:
 
         if tech_action is None:
             return None, 0, 'None', True
+            
+        # 2.5 Filtro Multi-Timeframe (MTF)
+        # Solo permitimos operar a favor de la tendencia de 1H
+        mtf_1h = features_dict.get('MTF_1h_trend', None)
+        if mtf_1h is not None:
+            if tech_action == 1 and mtf_1h == 0:
+                return None, 0, 'MTF Bearish Veto', True
+            if tech_action == 0 and mtf_1h == 1:
+                return None, 0, 'MTF Bullish Veto', True
 
         # 3. Vetos de Mercado
+        # Primero, revisar si hay Crash Macro en BTC
+        if tech_action == 1:  # Si intentamos hacer LONG
+            macro_veto = self.vetos.check_macro_crash(btc_features)
+            if macro_veto:
+                return None, 0, macro_veto, True
+                
         btc_action, _ = ctx.get('btc_corr', (None, 0))
         btc_row = btc_features.iloc[-1].to_dict() if btc_features is not None else None
         market_veto = self.vetos.check_market_vetoes(tech_action, btc_action, btc_row)

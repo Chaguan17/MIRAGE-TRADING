@@ -8,6 +8,9 @@ import config
 import brain
 import executor
 from binance_api import MirageBinance
+from backend.tracker import TradeTracker
+from backend.brain.ml_engine import ml_engine_instance
+from market_stream import stream_manager
 import data_engine as data_engine
 import risk_manager as risk_manager
 import tracker as tracker
@@ -115,6 +118,7 @@ def main():
     bots = {}
     for sym in pares_activos:
         print(f"⚙️  Construyendo motor para {sym}...")
+        api.setup_symbol(sym, config.LEVERAGE)
         bots[sym] = _build_bot(sym, api, initial_balance)
         cb = make_callback(sym, bots, api)
         bots[sym]["tr"].set_on_close_callback(cb)
@@ -125,6 +129,22 @@ def main():
     }
     already_slept = False
     last_backup_dt = None
+    last_known_balance = config.PAPER_BALANCE
+
+    timeframes_to_track = list(set([config.TIMEFRAME, "1h", "4h", "1m"]))
+    symbols_to_track = list(pares_activos)
+    if "BTCUSDT" not in symbols_to_track:
+        symbols_to_track.append("BTCUSDT")
+        
+    stream_manager.initialize(symbols_to_track, timeframes_to_track)
+    
+    print("Descargando históricos iniciales para el caché RAM...")
+    for sym in stream_manager.symbols:
+        for tf in timeframes_to_track:
+            df = api.get_historical_data(sym.upper(), tf, limit=200)
+            stream_manager.set_historical_cache(sym, tf, df)
+    
+    stream_manager.start()
 
     while True:
         # ── Ciclo circadiano ──────────────────────────────────────────────────
@@ -167,6 +187,7 @@ def main():
             current_balance = api.get_balance()
             for sym in pares_activos:
                 if sym not in bots:
+                    api.setup_symbol(sym, config.LEVERAGE)
                     bots[sym] = _build_bot(sym, api, current_balance)
                 else:
                     memoria = bots[sym]["tr"].active_trades
@@ -182,27 +203,45 @@ def main():
             print("✅ Flota actualizada.\n")
 
         account_balance = api.get_balance()
+        if account_balance > 0:
+            last_known_balance = account_balance
+        else:
+            account_balance = last_known_balance
+            
         available_margin = api.get_available_margin()
 
-        web_operaciones_activas = []
-        web_pnl_global = 0
-        web_trades_global = 0
-        web_wins_global = 0
+        # ── COMANDOS BIDIRECCIONALES (PANIC BUTTON) ───────────────────────────
+        command_file = os.path.join(config.STORAGE_DIR, "commands.json")
+        if os.path.exists(command_file):
+            try:
+                with open(command_file, "r", encoding="utf-8") as f:
+                    cmd_data = json.load(f)
+                if cmd_data.get("action") == "PANIC_SELL":
+                    print("\n🚨🚨 PANIC BUTTON ACTIVADO 🚨🚨 Cerrando todas las operaciones...")
+                    for sym in pares_activos:
+                        b = bots[sym]
+                        if len(b["tr"].active_trades) > 0:
+                            # Conseguir el precio actual
+                            live_1m = stream_manager.get_data(sym, "1m")
+                            if live_1m is not None and not live_1m.empty:
+                                close_p = live_1m.iloc[-1]['close']
+                            else:
+                                close_p = b["tr"].active_trades[0]['entry_price']
+                            b["tr"].force_close(close_p, api)
+                os.remove(command_file)
+            except Exception as e:
+                logger.error(f"Error procesando command_file: {e}")
 
         # ── SOLUCIÓN PUNTO 3: Obtención anticipada del contexto global de BTC ──
         global_btc_features = None
-        if "BTCUSDT" in pares_activos:
-            # Si BTC está en la flota, descargamos sus datos al principio del ciclo para alimentar a los demás pares
-            btc_raw = api.get_historical_data("BTCUSDT", config.TIMEFRAME, limit=200)
+        if "BTCUSDT" in pares_activos or btc_context_engine:
+            btc_raw = stream_manager.get_data("BTCUSDT", config.TIMEFRAME)
+            btc_1h = stream_manager.get_data("BTCUSDT", "1h")
+            btc_4h = stream_manager.get_data("BTCUSDT", "4h")
+            
+            engine = bots["BTCUSDT"]["engine"] if "BTCUSDT" in pares_activos else btc_context_engine
             if btc_raw is not None:
-                global_btc_features = bots["BTCUSDT"]["engine"].prepare_features(
-                    btc_raw
-                )
-        elif btc_context_engine:
-            # Si BTC no está en la flota, usamos el motor aislado de contexto
-            btc_raw = api.get_historical_data("BTCUSDT", config.TIMEFRAME, limit=200)
-            if btc_raw is not None:
-                global_btc_features = btc_context_engine.prepare_features(btc_raw)
+                global_btc_features = engine.prepare_features(btc_raw, btc_1h, btc_4h)
 
         print("\n" + "═" * 64)
         for sym in pares_activos:
@@ -212,12 +251,13 @@ def main():
                 if sym == "BTCUSDT" and global_btc_features is not None:
                     features = global_btc_features
                 else:
-                    live_data = api.get_historical_data(
-                        sym, config.TIMEFRAME, limit=200
-                    )
+                    live_data = stream_manager.get_data(sym, config.TIMEFRAME)
+                    live_1h = stream_manager.get_data(sym, "1h")
+                    live_4h = stream_manager.get_data(sym, "4h")
+                    
                     if live_data is None:
                         continue
-                    features = b["engine"].prepare_features(live_data)
+                    features = b["engine"].prepare_features(live_data, live_1h, live_4h)
 
                 b["consecutive_errors"] = 0
                 current_price = features.iloc[-1]["close"]
@@ -258,9 +298,6 @@ def main():
                         b["cooldown_left"] = config.COOLDOWN_CANDLES
 
                 total, wins, losses, wr, pnl = b["tr"].get_dashboard_stats()
-                web_pnl_global += pnl
-                web_trades_global += total
-                web_wins_global += wins
 
                 print(
                     f"📊 {sym:<8} | {current_price:>10,.2f} USDT | WR: {wr:>4.1f}% | PnL: {pnl:>7.4f} | Risk: {b['rm'].get_current_risk():.2%}"
@@ -271,7 +308,16 @@ def main():
                 with b["tr"]._trades_lock:
                     active_trades_snapshot = list(b["tr"].active_trades)
 
-                # ── Scale-In (DCA) ────────────────────────────────────────────
+                # ── Señal de entrada (Consenso IA) ────────────────────────────
+                action_code, confidence, method_name, use_sl = b[
+                    "brain"
+                ].get_consensus_prediction(
+                    last_row,
+                    features_df=features,
+                    btc_features=global_btc_features if sym != "BTCUSDT" else None,
+                )
+
+                # ── Scale-In Inteligente (DCA) ─────────────────────────────────
                 if 0 < len(active_trades_snapshot) < config.MAX_BULLETS:
                     t_ref = active_trades_snapshot[0]
                     dca_levels = b["rm"].calculate_averaging_levels(
@@ -285,39 +331,39 @@ def main():
                         ) or (
                             t_ref["action"] == "SHORT" and current_price >= target_price
                         )
-                        if is_hit:
-                            print(f"   🎯 {sym} SCALE-IN @ {current_price}")
-                            # MEJORA DE RIESGO: Argumentos explícitos por clave para el dimensionamiento adaptativo exacto
-                            size = b["rm"].calculate_position_size(
-                                account_balance=account_balance,
-                                entry_price=current_price,
-                                stop_loss_price=(
-                                    t_ref["sl"] if t_ref.get("use_sl") else None
-                                ),
-                                current_balance=account_balance,
-                            )
-                            if size > 0:
-                                margin_needed = (size * current_price) / config.LEVERAGE
-                                if margin_needed <= available_margin:
-                                    api.occupy_margin(margin_needed)
-                                    b["tr"].register_trade(
-                                        t_ref["action"],
-                                        current_price,
-                                        size,
-                                        t_ref["sl"],
-                                        t_ref["tp"],
-                                        last_row,
-                                        t_ref.get("use_sl", True),
-                                    )
+                        
+                        ai_agrees = (t_ref["action"] == "LONG" and action_code == 1) or \
+                                    (t_ref["action"] == "SHORT" and action_code == 0)
 
-                # ── Señal de entrada ──────────────────────────────────────────
-                action_code, confidence, method_name, use_sl = b[
-                    "brain"
-                ].get_consensus_prediction(
-                    last_row,
-                    features_df=features,
-                    btc_features=global_btc_features if sym != "BTCUSDT" else None,
-                )
+                        if is_hit:
+                            if ai_agrees:
+                                print(f"   🎯 {sym} SCALE-IN @ {current_price} | Confirmado por IA")
+                                # MEJORA DE RIESGO: Argumentos explícitos por clave para el dimensionamiento adaptativo exacto
+                                size = b["rm"].calculate_position_size(
+                                    account_balance=account_balance,
+                                    entry_price=current_price,
+                                    stop_loss_price=(
+                                        t_ref["sl"] if t_ref.get("use_sl") else None
+                                    ),
+                                    current_balance=account_balance,
+                                )
+                                if size > 0:
+                                    margin_needed = (size * current_price) / config.LEVERAGE
+                                    if margin_needed <= available_margin:
+                                        api.occupy_margin(margin_needed)
+                                        b["tr"].register_trade(
+                                            t_ref["action"],
+                                            current_price,
+                                            size,
+                                            t_ref["sl"],
+                                            t_ref["tp"],
+                                            last_row,
+                                            t_ref.get("use_sl", True),
+                                        )
+                            else:
+                                print(f"   ⏳ {sym} Nivel DCA alcanzado, esperando confirmación técnica...")
+
+                # Señal ya calculada arriba para uso conjunto con el DCA
 
                 can_trade = (
                     action_code is not None
@@ -387,6 +433,16 @@ def main():
 
         # ── Actualizar dashboard ──────────────────────────────────────────────
         try:
+            web_pnl_global = 0
+            web_trades_global = 0
+            web_wins_global = 0
+            
+            for sym in pares_activos:
+                total, wins, losses, wr, pnl = bots[sym]["tr"].get_dashboard_stats()
+                web_pnl_global += pnl
+                web_trades_global += total
+                web_wins_global += wins
+                
             wr_global = (
                 (web_wins_global / web_trades_global * 100)
                 if web_trades_global > 0
@@ -418,25 +474,37 @@ def main():
                 
                 curr_price = b.get("last_price", 0)
                 
+                if not active_trades_snapshot:
+                    continue
+
+                total_size = sum(t.get("size", 0) for t in active_trades_snapshot)
+                if total_size > 0:
+                    avg_entry = sum(t.get("size", 0) * t.get("entry_price", 0) for t in active_trades_snapshot) / total_size
+                else:
+                    avg_entry = active_trades_snapshot[0].get("entry_price", 0)
+
+                total_pnl = 0
                 for t in active_trades_snapshot:
                     if curr_price > 0:
-                        fpnl = (curr_price - t["entry_price"]) * t["size"] if t["action"] == "LONG" else (t["entry_price"] - curr_price) * t["size"]
-                    else:
-                        fpnl = 0
-                        
-                    web_operaciones_activas_safe.append({
-                        "pair": sym,
-                        "current_price": round(curr_price, 2),
-                        "type": t["action"],
-                        "entry": round(t["entry_price"], 4),
-                        "tp": round(t["tp"], 4) if t["tp"] else 0,
-                        "sl": round(t["sl"], 4) if t["sl"] else 0,
-                        "current_pnl": round(fpnl, 2),
-                        "is_trailing": t.get("is_trailing", False),
-                        "is_breakeven": t.get("is_breakeven", False),
-                        "size": t.get("size", 0),
-                        "position_value": t.get("size", 0) * t.get("entry_price", 0),
-                    })
+                        fpnl = (curr_price - t["entry_price"]) * t.get("size", 0) if t["action"] == "LONG" else (t["entry_price"] - curr_price) * t.get("size", 0)
+                        total_pnl += fpnl
+
+                last_t = active_trades_snapshot[-1]
+                
+                web_operaciones_activas_safe.append({
+                    "pair": sym,
+                    "current_price": round(curr_price, 6),
+                    "type": last_t["action"],
+                    "entry": round(avg_entry, 6),
+                    "tp": round(last_t.get("tp"), 6) if last_t.get("tp") else 0,
+                    "sl": round(last_t.get("sl"), 6) if last_t.get("sl") else 0,
+                    "current_pnl": round(total_pnl, 2),
+                    "is_trailing": any(t.get("is_trailing", False) for t in active_trades_snapshot),
+                    "is_breakeven": any(t.get("is_breakeven", False) for t in active_trades_snapshot),
+                    "size": total_size,
+                    "position_value": total_size * avg_entry,
+                    "bullets": len(active_trades_snapshot)
+                })
 
             estado = {
                 "pnl_total": round(float(web_pnl_global), 2),
@@ -449,8 +517,14 @@ def main():
                 "risk_managers": rm_status,
                 "tracker_stats": tracker_stats,
             }
-            with open(config.LIVE_STATE_PATH, "w", encoding="utf-8") as f:
-                json.dump(estado, f)
+            import sqlite3
+            import json
+            conn = sqlite3.connect(config.DB_PATH)
+            c = conn.cursor()
+            c.execute('CREATE TABLE IF NOT EXISTS system_state (id INTEGER PRIMARY KEY, state_json TEXT)')
+            c.execute('INSERT OR REPLACE INTO system_state (id, state_json) VALUES (1, ?)', (json.dumps(estado),))
+            conn.commit()
+            conn.close()
         except Exception as e:
             logger.error(f"Error actualizando dashboard: {e}")
 

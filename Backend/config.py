@@ -104,7 +104,7 @@ def validate_sleep_config(start_h: int, start_m: int, end_h: int, end_m: int) ->
 
 PAPER_BALANCE = float(dyn.get("PAPER_BALANCE", 1000))
 LEVERAGE      = clamp_leverage(dyn.get("LEVERAGE", 5))
-TIMEFRAME     = dyn.get("TIMEFRAME", "1m")
+TIMEFRAME     = dyn.get("TIMEFRAME", "15m")
 PARES_ACTIVOS = dyn.get("PARES_ACTIVOS", ["BTCUSDT"])
 SYMBOL        = PARES_ACTIVOS[0] if PARES_ACTIVOS else "BTCUSDT"  # alias legacy
 
@@ -112,7 +112,7 @@ MAX_BULLETS        = int(dyn.get("MAX_BULLETS", 3))
 MARTINGALE_ENABLED = bool(dyn.get("MARTINGALE_ENABLED", False))
 MARTINGALE_MULTIPLIER  = float(dyn.get("MARTINGALE_MULTIPLIER", 1.5))
 MARTINGALE_MAX_STEPS   = int(dyn.get("MARTINGALE_MAX_STEPS", 2))
-COOLDOWN_CANDLES   = int(dyn.get("COOLDOWN_CANDLES", 5))
+COOLDOWN_CANDLES   = int(dyn.get("COOLDOWN_CANDLES", 3))
 
 # Ciclo circadiano
 SLEEP_START_HOUR   = int(dyn.get("SLEEP_START_HOUR", 23))
@@ -145,18 +145,21 @@ MIN_SIZE_USDT  = float(dyn.get("MIN_SIZE_USDT", 5.0))
 # Stops dinámicos
 ATR_MULTIPLIER        = float(dyn.get("ATR_MULTIPLIER", 1.5))
 TP_MULTIPLIER         = float(dyn.get("TP_MULTIPLIER", 3.0))
+
+TRAILING_ATR_MULTIPLIER = float(dyn.get("TRAILING_ATR_MULTIPLIER", 0.5))
+
 TRAILING_STOP_ACTIVATION = validate_percentage(
     "TRAILING_STOP_ACTIVATION",
     normalize_percentage(float(dyn.get("TRAILING_STOP_ACTIVATION", 0.005)), "TRAILING_STOP_ACTIVATION")
-)
-TRAILING_STOP_DISTANCE = validate_percentage(
-    "TRAILING_STOP_DISTANCE",
-    normalize_percentage(float(dyn.get("TRAILING_STOP_DISTANCE", 0.0025)), "TRAILING_STOP_DISTANCE")
 )
 BREAKEVEN_ACTIVATION = validate_percentage(
     "BREAKEVEN_ACTIVATION",
     normalize_percentage(float(dyn.get("BREAKEVEN_ACTIVATION", 0.5)), "BREAKEVEN_ACTIVATION")
 )
+
+# Filtros Macro (Veto Engine)
+VETO_CRASH_PCT = float(dyn.get("VETO_CRASH_PCT", 0.08))  # 8% caída en 1H
+
 
 # Ajuste dinámico TP/SL por volatilidad
 TP_VOL_REF              = float(dyn.get("TP_VOL_REF", 0.5))
@@ -202,11 +205,22 @@ MAX_BOOTSTRAP_BUFFER   = int(dyn.get("MAX_BOOTSTRAP_BUFFER", 500))
 # ESTRATEGIAS ACTIVAS Y PESOS DE CAPAS
 # ════════════════════════════════════════════════════════════════════════════
 
-ACTIVE_STRATEGIES = dyn.get("ACTIVE_STRATEGIES", [
-    "trend", "reversion", "breakout",
-    "smc", "vwap", "liquidity",
-    "orderflow", "wyckoff", "btc_corr"
-])
+_all_strats = {
+    "STRATEGY_TREND": "trend",
+    "STRATEGY_REVERSION": "reversion",
+    "STRATEGY_BREAKOUT": "breakout",
+    "STRATEGY_SMC": "smc",
+    "STRATEGY_VWAP": "vwap",
+    "STRATEGY_LIQUIDITY": "liquidity",
+    "STRATEGY_ORDERFLOW": "orderflow",
+    "STRATEGY_WYCKOFF": "wyckoff",
+    "STRATEGY_BTC_CORR": "btc_corr"
+}
+
+ACTIVE_STRATEGIES = []
+for key, name in _all_strats.items():
+    if dyn.get(key, True):
+        ACTIVE_STRATEGIES.append(name)
 
 LAYER_WEIGHTS = dyn.get("LAYER_WEIGHTS", {
     "basic":     1.0,
