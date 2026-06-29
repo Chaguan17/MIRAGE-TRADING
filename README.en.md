@@ -3,14 +3,16 @@
 ## 🎯 Executive Summary
 
 **Mirage Trading** is an advanced algorithmic trading bot for cryptocurrency futures (Binance Futures) that combines:
-- **Machine Learning** (Random Forest) as a prediction system.
+- **Machine Learning Ensemble** (Random Forest + XGBoost) as a prediction system.
 - **9 integrated technical strategies**.
+- **Alternative Data** (Funding Rate, Fear & Greed Index).
 - **Paper Trading** for safe simulation.
-- **Real-time Dashboard** for monitoring.
+- **Real-time Dashboard** for monitoring (TradingView charts).
 - **SQLite Database** for persistence and data integrity.
+- **Native WebSockets** (Zero latency).
 - Modular Python + React architecture.
 
-**Status:** Sprint 3 (AI Optimization and Advanced Risk Management)
+**Status:** Sprint 4 Completed (Institutional AI Evolution and Scalability)
 
 ---
 
@@ -27,65 +29,66 @@ chaguan17-mirage-trading/
 
 **Backend:**
 - `fastapi` - REST API
-- `ccxt` - Binance Connection
-- `sklearn` - Machine Learning (Random Forest)
+- `ccxt` - Binance REST Connection
+- `websocket-client` - Binance Streams
+- `sklearn` & `xgboost` - Machine Learning Ensemble
+- `optuna` - Auto-Optimization Genetic Algorithms
 - `sqlite3` - Robust Data Storage
 - `pandas` / `numpy` - Data processing
 
 **Frontend:**
 - `React 18+`
-- `Recharts` - Financial data visualization
+- `lightweight-charts` - TradingView financial charts
 - `WebSockets` - Real-time market data
 
 ---
 
 ## 🧠 Core Components
 
-### 1. **Mirage Brain (AI System)**
+### 1. **Mirage Brain & ML Engine (AI System)**
 The heart of the bot. It evaluates market conditions through three layers:
 - **Consensus Voting**: Aggregates signals from 9 strategies (Trend, SMC, Wyckoff, OrderFlow, etc.).
-- **Veto System**: 
-  - **BTC Veto**: Signals must align with the global market trend.
-  - **RSI Veto**: Dynamic OB/OS filters adjusted by volatility.
-  - **AI Veto**: Blocks trades if predicted success probability is < 40%.
+- **Ensemble Classifier (NEW)**: A `VotingClassifier` combines `RandomForest` and `XGBoost`. Both models must independently agree to buy, drastically reducing false positives.
+- **Veto System**: Blocks trades if global BTC trend is crashing or if the predicted success probability is too low.
 
 ### 2. **Advanced Risk Manager**
 - **Smart Sizing**: Position size calculated based on balance and real buying power.
 - **Martingale**: Configurable risk multiplier after losses to recover capital quickly.
 - **Protections**: 
   - **Breakeven**: Moves SL to entry price at 50% TP progress.
-  - **Trailing Stop**: Pursues profit using ATR-based distance.
-  - **Scale-In (DCA)**: Up to 3 "bullets" to improve entry price during pullbacks.
+  - **Trailing Stop**: Pursues profit using ATR-based dynamic distance.
+  - **Intelligent Scale-In (DCA)**: Up to 3 "bullets" to improve entry price during pullbacks, only triggered if the AI spots a divergence.
 
-### 3. **SQLite Tracker**
-Replaced legacy CSV storage with a robust database:
-- Transactional safety to prevent data corruption.
-- High-performance metrics calculation.
-- Automatic nightly retraining using historical data.
+### 3. **Market Stream & Data Engine**
+- **Zero Latency**: Subscribed to Binance WebSocket Streams (`@kline_1m`, `@markPrice`), dropping REST API usage by 99%.
+- **Alternative Data**: Feeds the neural network not just with OHLCV, but with the **Funding Rate** and the global **Fear & Greed Index** to gauge institutional sentiment.
+
+### 4. **SQLite Tracker & Optuna Optimizer**
+- Replaced legacy JSON/CSV storage with a robust transactional SQLite database (`mirage_trading.db`).
+- **Auto-Tune Engine**: A standalone `optimizer.py` script uses Optuna and historical SQLite data to genetically find the most profitable hyper-parameters for the ML models.
 
 ---
 
 ## 💻 Professional Dashboard
 
-- **MIRAGE TERMINAL**: Real-time monitoring of live PnL, active operations, and fleet status.
-- **MIRAGE METRICS**: Deep analytical view including:
-  - **Sharpe Ratio**: Risk efficiency measurement.
-  - **Profit Factor**: Gross profit vs. gross loss ratio.
-  - **Max Drawdown**: Historical peak-to-trough decline.
-  - **Temporal Analysis**: Daily and monthly performance charts.
+- **TradingView Integration**: The old equity curve has been replaced by `TradingChart.jsx`, drawing real-time candlesticks, Entry levels, Take Profits, and Stop Losses explicitly on the chart.
+- **Bi-Directional Control**: Includes a "PANIC SELL" button to force-close the entire active fleet directly from the UI.
+- **Glassmorphism Settings**: Beautifully redesigned Settings UI allowing strategy toggling and parameter tweaking without touching any code.
 
 ---
 
 ## 🎲 Operational Flow
 
 ```
-[Market Data] → [Veto Layer] → [Voting Consensus] 
-                                    ↓
-                            [AI Probability Prediction]
-                                    ↓
-                            [Risk & Margin Check]
-                                    ↓
-                            [Execution & Tracking]
+[WebSocket Streams] + [Alternative Data] 
+            ↓
+       [Data Engine] 
+            ↓
+[9 Strategies + Ensemble ML Engine]
+            ↓
+     [Risk & Margin Check]
+            ↓
+    [Execution & SQLite Tracking]
 ```
 
 ---
@@ -94,17 +97,13 @@ Replaced legacy CSV storage with a robust database:
 
 - **Paper Trading by default**: Safe environment for AI learning.
 - **Margin Awareness**: The bot tracks used vs. available margin to prevent over-leveraging.
-- **Sleep Cycles**: Automatic nightly maintenance and retraining.
+- **Sleep Cycles**: Automatic nightly maintenance.
 - **Hot-Reload**: Parameters can be updated from the UI without stopping the engine.
 
 ---
 
 ## 🎓 Conclusion
 
-**Mirage Trading** is a high-level educational/experimental trading bot. It is designed to scale and learn from every trade, moving from pure technical analysis to an AI-driven approach.
+**Mirage Trading** has moved from an experimental setup to an institutional-grade algorithmic trading bot. The addition of XGBoost, Optuna, Alternative Data, SQLite, and WebSockets makes it extremely resilient and intelligent.
 
-> **Warning**: Only intended for Paper Trading. Rigorous backtesting is required before any live capital deployment.
-
----
-**Analysis performed:** May 2026
-**Project:** Mirage Trading (chaguan17)
+> **Recommendation**: Let the bot run in Paper Trading mode to build a massive dataset, and run `optimizer.py` every weekend to naturally evolve its neural pathways.

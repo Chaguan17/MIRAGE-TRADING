@@ -209,7 +209,12 @@ class RiskManager:
         if dist_moved < dist_total * config.TRAILING_STOP_ACTIVATION:
             return None
 
-        trail_dist = current_price * config.TRAILING_STOP_DISTANCE
+        # Trailing Dinámico Basado en Volatilidad
+        if atr_value and atr_value > 0:
+            trail_dist = atr_value * getattr(config, 'TRAILING_ATR_MULTIPLIER', 0.5)
+        else:
+            trail_dist = current_price * 0.0025 # Fallback estático
+            
 
         if action == 'LONG':
             new_sl = round(current_price - trail_dist, 4)

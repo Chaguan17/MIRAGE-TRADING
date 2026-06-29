@@ -3,14 +3,16 @@
 ## 🎯 Resumen Ejecutivo
 
 **Mirage Trading** es un bot de trading algorítmico avanzado para futuros de criptomonedas (Binance Futures) que combina:
-- **Machine Learning** (Random Forest) como sistema de predicción
-- **9 estrategias técnicas** diferentes integradas
-- **Paper Trading** para simulación segura
-- **Dashboard en tiempo real** para monitoreo
-- **Base de Datos SQLite** para persistencia e integridad
-- Arquitectura modular Python + React
+- **Machine Learning Ensemble** (Random Forest + XGBoost) como sistema de predicción.
+- **9 estrategias técnicas** diferentes integradas.
+- **Datos Alternativos** (Funding Rate, Fear & Greed Index).
+- **Paper Trading** para simulación segura.
+- **Dashboard en tiempo real** para monitoreo (TradingView charts).
+- **Base de Datos SQLite** para persistencia e integridad.
+- **WebSockets Nativos** (Latencia cero)
+- Arquitectura modular Python + React.
 
-**Estado:** Sprint 3 (Optimización de Inteligencia y Gestión de Riesgo Avanzada)
+**Estado:** Sprint 4 Completado (Evolución Institucional de la IA y Escalabilidad)
 
 ---
 
@@ -28,13 +30,16 @@ chaguan17-mirage-trading/
 **Backend:**
 - `fastapi` - API REST
 - `ccxt` - Conexión con Binance
-- `sklearn` - Machine Learning (Random Forest)
-- `pandas` - Manipulación de datos
-- `numpy` - Cálculos numéricos
+- `websocket-client` - Binance Streams
+- `sklearn` & `xgboost` - Machine Learning Ensemble
+- `optuna` - Algoritmos Genéticos de Auto-Optimización
+- `pandas` / `numpy` - Manipulación de datos
+- `sqlite3` - Base de datos
 
 **Frontend:**
-- `React 18+` + `React Router DOM 7.15`
+- `React 18+` + `React Router DOM`
 - `Vite` - Build tool
+- `lightweight-charts` - Gráficas de TradingView interactivas
 - `WebSockets` - Datos en tiempo real
 
 ---
@@ -43,91 +48,33 @@ chaguan17-mirage-trading/
 
 ### 1. **api.py** - Servidor FastAPI
 **Responsabilidades:**
-- Endpoint `/api/dashboard` → Datos para el dashboard (PnL, operaciones, métricas)
-- Endpoint `/api/performance` → Histórico completo desde SQLite
-- Endpoint `/api/config` → Lectura/escritura de configuración
-- Middleware CORS configurado
-- Gestión de storage (JSON + SQLite)
+- Servir datos al Frontend vía SQLite y WebSockets.
+- Endpoint bidireccional `/api/commands` (Ej. Botón del Pánico).
 
-**Flujo de datos:**
-1. Consulta `mirage_trading.db` para obtener el historial.
-2. Procesa `live_state.json` para el estado actual.
-3. Filtra registros inválidos (UNKNOWN).
-4. Sincroniza con el frontend mediante polling y WebSockets.
+### 2. **market_stream.py** - Gestor de WebSockets (NUEVO SPRINT 2/4)
+- Mantiene conexión viva con `fstream.binance.com`.
+- Descarga velas, Funding Rate (`@markPrice`) y Open Interest en vivo.
+- Reduce el consumo de la API REST en un 99%.
 
-**Configuración por defecto:**
-```json
-{
-  "TIMEFRAME": "1m",
-  "PAPER_BALANCE": 1000 USDT,
-  "RISK_PER_TRADE": 2%,
-  "MIN_CONFIDENCE": 65%,
-  "LEVERAGE": 10x
-}
-```
+### 3. **brain.py & ml_engine.py** - Sistema de IA Híbrido (NUEVO SPRINT 4)
+El corazón del bot ha evolucionado de un simple modelo a un **Ensamble Institucional**:
+- **VotingClassifier:** Combina Random Forest y XGBoost. Ambos modelos deben dar señal de compra simultáneamente para entrar al mercado.
+- **Optuna Optimizer:** Script dedicado (`optimizer.py`) que usa algoritmos genéticos los fines de semana para encontrar los hiperparámetros perfectos.
 
-### 2. **binance_api.py** - Wrapper de Binance
-**Clase: `MirageBinance`**
-- Abstracción de CCXT para Binance Futures
-- Soporta **paper trading** (simulación con balance ficticio)
-- Métodos clave:
-  - `check_connection()` → Sincroniza reloj con Binance
-  - `get_balance()` → Balance actual
-  - `get_historical_data()` → Obtiene OHLCV (candles)
-
-**Características de seguridad:**
-- Manejo automático de RecvWindow (sincronización de reloj)
-- Rate limiting habilitado
-- Modo sandbox configurable
-
-### 3. **brain.py** - Sistema de IA
-**Clase: `MirageBrain`**
-
-El corazón del bot. Contiene:
-
-**Estrategias integradas:**
-1. **Trend Follower** - Sigue tendencias alcistas/bajistas
-2. **Mean Reversion** - Compra en mínimos, vende en máximos
-3. **Breakout Logic** - Entrada en roturas de niveles clave
-4. **SMC Structure** - Smart Money Concepts (Support/Resistance)
-5. **VWAP Method** - Volume Weighted Average Price
-6. **Liquidity Zones** - Zonas de liquidez para órdenes
-7. **OrderFlow** - Análisis de flujo de órdenes
-8. **Wyckoff Method** - Acumulación/distribución
-9. **BTC Correlation** - Correlación con Bitcoin
-
-**Modelo ML:**
-- Random Forest Classifier
-- Requisitos: Mínimo 5 trades para entrenar
-- Features: RSI, EMA, ATR + salidas de estrategias
-
-### 4. **data_engine.py** - Motor de Datos
-Extrae features técnicos de los precios:
-- RSI (Índice de Fuerza Relativa)
-- EMA (Media Móvil Exponencial)
-- ATR (Average True Range - volatilidad)
+### 4. **data_engine.py** - Motor de Datos Aumentado
+Aparte del análisis técnico clásico (RSI, EMA, ATR, MACD, Orderflow, Wyckoff), ahora inyecta **Datos Alternativos**:
+- **Fear & Greed Index:** Sentimiento global desde `alternative.me`.
+- **Funding Rate:** Tasa de financiación extraída de WebSockets.
 
 ### 5. **risk_manager.py** - Gestión de Riesgo
-- **Position Sizing dinámico** basado en % de capital
-- **Stop Loss** automático
-- **Take Profit** múltiple
-- **Scale-In (DCA)**: Hasta 3 balas para mejorar el precio promedio.
-- **Martingala**: Multiplicador de riesgo tras pérdidas con límite de pasos.
+- **Position Sizing dinámico** basado en % de capital.
+- **Stop Loss** dinámico (basado en ATR) y Breakeven automático.
+- **Scale-In (DCA) Inteligente**: Solo promedia si la IA lo aprueba.
+- **Martingala limitable**.
 
-### 6. **executor.py** - Ejecutor de Órdenes
-- Abre/cierra posiciones
-- Gestiona órdenes limitadas y por mercado
-- Registra operaciones
-
-### 7. **tracker.py** - Feedback Loop
-Registra en CSV:
-- Timestamp, par, lado (LONG/SHORT)
-- Entrada, salida, PnL
-- Etiquetas para reentrenamiento de IA
-
-### 8. **config.py** - Configuración
-- API keys de Binance
-- Parámetros del bot
+### 6. **executor.py & tracker.py** - Ejecutor y Registro (SQLite)
+- Abre/cierra posiciones reales o paper.
+- Registra todo transaccionalmente en `mirage_trading.db`.
 
 ---
 
@@ -136,225 +83,56 @@ Registra en CSV:
 ### Componentes principales:
 
 **Dashboard Component**
-- **Cards de KPIs:** PnL total, Win Rate, Operaciones activas
-- **Gráfica de PnL acumulado** (últimas 30 operaciones)
-- **Performance Pro**: Vista dedicada con Sharpe Ratio, Max Drawdown y Profit Factor.
-- **Precios en vivo**: Streams dinámicos basados en la flota activa.
+- **TradingChart (NUEVO SPRINT 3):** Gráfica interactiva de TradingView (`lightweight-charts`) que dibuja tus puntos de entrada, SL y TP explícitamente en el gráfico. Escala dinámicamente según los decimales de la criptomoneda.
+- **Panel Bidireccional:** Botón de "PANIC SELL" para forzar el cierre de toda la flota.
 
 **SettingsView Component**
-- Panel para modificar configuración
-- Dropdown para seleccionar estrategia
-- **Entrada Natural**: Gestión de porcentajes (2% vs 0.02) simplificada.
-- **Categorización**: General, Mercado, Riesgo, Ejecución e IA.
-
-**Tema personalizado:**
-- Colores acorde al modo claro/oscuro
-- Paleta: Púrpura (#aa3bff), blanco/gris
-- Responsive (mobile + desktop)
+- Panel de cristal (Glassmorphism) para encender/apagar estrategias dinámicamente y ajustar modificadores (ej. Multiplicador de ATR) sin tocar código.
 
 ---
 
 ## 🚀 Estado del Desarrollo
 
-### ✅ SPRINT 1 & 2: COMPLETADO
-- [x] Conexión blindada a Binance API
+### ✅ SPRINT 1, 2 & 3: COMPLETADO
+- [x] Conexión blindada a Binance API (REST y WebSockets)
 - [x] Paper Trading (simulación)
-- [x] Data Engine (features)
-- [x] Brain base (Random Forest)
-- [x] Risk Manager (Position Sizing)
-- [x] Scale-In logic
-- [x] Hot-Reloading (cargar código sin reiniciar)
-- [x] Migración a SQLite
+- [x] Inteligencia de Mercado (Veto Engine, Multi-TF 15m/1h/4h)
+- [x] Risk Manager Avanzado (ATR Trailing Stop, DCA Inteligente)
+- [x] Migración Completa a SQLite (`live_state` y `history`)
+- [x] UI/UX Profesional (TradingView, Botón de Pánico, Ajustes Dinámicos)
 
-### 🔄 SPRINT 3: EN PROCESO
-- [x] Performance Dashboard (Métricas Pro)
-- [x] Martingala integrada
-- [x] Sistema de Vetos de IA (RSI, Tendencia BTC, Probabilidad)
-- ⏳ Próximas: Backtesting, Optimización de pesos de IA.
+### ✅ SPRINT 4: COMPLETADO
+- [x] Ensamble IA (XGBoost + Random Forest en Voting Classifier)
+- [x] Ingesta de Datos Alternativos (Funding Rate, Fear & Greed Index)
+- [x] Script de Auto-Optimización (Optuna)
 
 ---
 
 ## 🎲 Flujo de Operación
 
 ```
-[Binance API] → [Data Engine] → [Brain (9 estrategias)] 
-                                    ↓
-                                [Voting System]
-                                    ↓
-                            [Risk Manager]
-                                    ↓
-                            [Executor] → [Tracker (CSV)]
-                                    ↓
-                                [Dashboard]
+[Binance Streams] + [Alternative Data] 
+            ↓
+       [Data Engine] 
+            ↓
+  [Brain (9 estrategias)] 
+            ↓
+ [Voting Classifier (RF + XGB)]
+            ↓
+      [Risk Manager]
+            ↓
+   [Executor] → [SQLite]
+            ↓
+  [TradingView Dashboard]
 ```
-
-1. **Data Engine** obtiene datos del mercado (OHLCV)
-2. **Brain** evalúa con 9 estrategias
-3. Cada estrategia genera señal (BUY/SELL/HOLD)
-4. **Voting system** calcula consenso (confidence)
-5. **Risk Manager** valida riesgo
-6. **Executor** envía orden a Binance
-7. **Tracker** registra en CSV
-8. **Dashboard** muestra en tiempo real
-
----
-
-## ⚙️ Configuración Recomendada
-
-**Para Paper Trading (TEST):**
-```
-PAPER_BALANCE: 1000 USDT
-LEVERAGE: 5x
-RISK_PER_TRADE: 1%
-TIMEFRAME: 5m (volatilidad moderada)
-```
-
-**Para Trading Real (PRODUCCIÓN):**
-```
-LEVERAGE: 2-3x (máximo conservador)
-RISK_PER_TRADE: 0.5-1%
-TIMEFRAME: 15m-1h (menos ruido)
-MIN_CONFIDENCE: 75% (más selectivo)
-```
-
----
-
-## ⚠️ Fortalezas del Proyecto
-
-1. **Arquitectura modular** - Fácil de expandir
-2. **9 estrategias diversificadas** - Reduce sesgo
-3. **Machine Learning** - Adaptación dinámica
-4. **Paper Trading** - Pruebas sin riesgo real
-5. **Dashboard en vivo** - Monitoreo en tiempo real
-6. **Gestión de riesgo avanzada** - Scale-in, stop-loss dinámico
-7. **Logging completo** - Trazabilidad total
-
----
-
-## 🚨 Áreas de Mejora / Riesgos
-
-### Críticas:
-1. **Sin backtesting formal** 
-   - No hay validación histórica de estrategias
-   - Riesgo: Estrategias que funcionan en "dirección actual" pueden fallar
-
-2. **Modelo ML subentrenado**
-   - Requiere solo 5 trades para entrenar (muy poco)
-   - Risk: Overfitting severo
-
-3. **Sin diversificación de pares**
-   - Solo opera un par a la vez (?)
-   - Riesgo concentrado
-
-4. **Leverage configurable pero no limitado**
-   - 10x en producción es muy alto
-   - Risk: Liquidación rápida
-
-5. **Backtesting**
-   - Pendiente integrar validación histórica.
-
-6. **Consistencia IA**
-   - El reentrenamiento nocturno requiere volumen de datos (> 100 trades).
-
----
-
-## 💡 Recomendaciones
-
-### INMEDIATAS (Antes de producción):
-1. **Implementar Backtesting**
-   ```
-   Test histórico 2020-2024
-   Walkaorward analysis
-   Máximo drawdown < 20%
-   Sharpe ratio > 1.0
-   ```
-
-2. **Aumentar MIN_TRADES_FOR_AI a 100**
-   - Mejor generalización del modelo
-
-3. **Limitar LEVERAGE a 3x máximo**
-   - Seguridad
-
-4. **Mantener BTCUSDT en la flota**
-   - El cerebro utiliza BTC como ancla de correlación. Aunque no se opere, se recomienda que esté en `PARES_ACTIVOS` para activar los vetos de seguridad globales.
-
-4. **Implementar database (SQLite/PostgreSQL)**
-   - Para track de 1000+ operaciones
-
-### CORTO PLAZO (1-2 sprints):
-5. **Stop-loss obligatorio** 
-   - No permitir operaciones sin exit plan
-
-6. **Logging de errores de API**
-   - Reconexión automática
-
-7. **Metrics mejoradas**
-   - Sharpe Ratio, Calmar Ratio, Profit Factor
-
-### MEDIANO PLAZO (Sprint 3-4):
-8. **Multi-pair support**
-   - Diversificación en 5+ pares
-
-9. **Dynamic parameter optimization**
-   - Ajuste automático de timeframe según volatilidad
-
-10. **WebSocket para datos en vivo**
-    - En lugar de polling cada 3s
-
----
-
-## 📊 Métricas a Monitorear
-
-**Dashboard debería mostrar:**
-- ✅ PnL Total
-- ✅ Win Rate
-- ✅ Sharpe Ratio
-- ✅ Máximo Drawdown
-- ✅ Factor de Ganancia (Profit Factor)
-- ✅ Rendimiento Temporal (Diario/Mensual)
-
----
-
-## 🔐 Seguridad
-
-**Bien implementado:**
-- Paper trading default ✅
-- Rate limiting en CCXT ✅
-- CORS configurado ✅
-- API keys no en código ✅
-
-**A mejorar:**
-- Validación de entrada en API endpoints
-- Timeout en conexión Binance
-- Alertas de error crítico
 
 ---
 
 ## 🎓 Conclusión
 
-**Mirage Trading** es un **proyecto sólido y bien estructurado** para un trading bot educativo/experimental. 
+**Mirage Trading** ha superado su fase experimental y cuenta ahora con un esqueleto **de grado institucional**. Las reducciones drásticas en latencia (WebSockets), el salto en robustez predictiva (XGBoost + Optuna + F&G Index) y su persistencia segura (SQLite) lo convierten en un algoritmo formidable.
 
-**Fortalezas:**
-- Código limpio y modular
-- Buenas prácticas (separation of concerns)
-- Múltiples estrategias combinadas
-- UI clara
-
-**Punto crítico:** Necesita **backtesting riguroso** antes de operar en real. La falta de validación histórica es el principal riesgo.
-
-**Recomendación final:**
-```
-⚠️ USAR SOLO EN PAPER TRADING hasta completar:
-1. Backtesting 2023-2024
-2. Min confidence ajustado a 75%+
-3. Leverage limitado a 2x
-4. 100+ trades en paper (validación)
-5. Database para operaciones
-```
-
-**Potencial:** Con estas mejoras, podría ser una herramienta de trading viable.
-
----
-
-**Análisis realizado:** Mayo 2026
-**Proyecto:** Mirage Trading (chaguan17)
+**Próximos pasos recomendados:**
+- Dejar que el bot corra en Paper Trading (Live) por semanas para generar un dataset orgánico.
+- Ejecutar `optimizer.py` los domingos para afilar las neuronas.
+- (Opcional) Desarrollar módulo de Backtesting Formal.

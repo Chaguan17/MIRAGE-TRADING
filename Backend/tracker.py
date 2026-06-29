@@ -86,6 +86,7 @@ class TradeTracker:
                 self.total_trades = res[0]
                 self.total_pnl    = res[1] or 0.0
                 self.wins         = res[2] or 0
+                self.losses       = self.total_trades - self.wins
                 self.win_rate     = (self.wins / self.total_trades) * 100
             conn.close()
         except Exception as e:
@@ -173,6 +174,24 @@ class TradeTracker:
             sl_info = "(SL tocado)" if sl_was_hit else "(TP alcanzado)"
             print(f"{emoji} {self.symbol} {result} {sl_info} | PnL: {pnl:+.4f} USDT")
 
+    def force_close(self, close_price, api):
+        """Cierra de emergencia todas las posiciones."""
+        import executor
+        
+        for trade in self.active_trades[:]:
+            pnl = (close_price - trade['entry_price']) * trade['size'] if trade['action'] == 'LONG' else (trade['entry_price'] - close_price) * trade['size']
+            result = "WIN" if pnl > 0 else "LOSS"
+            
+            # Ejecutar Market Order opuesta
+            side = 'SHORT' if trade['action'] == 'LONG' else 'LONG'
+            executor.execute_trade(api, self.symbol, side, trade['size'])
+            
+            self._save_to_db(trade, close_price, result, pnl, sl_was_hit=False)
+            self.active_trades.remove(trade)
+            
+            if self._on_close_cb:
+                self._on_close_cb(self.symbol, pnl, trade['size'], trade['entry_price'])
+                
     def _save_to_db(self, trade, close_price, result, pnl, sl_was_hit):
         row = {
             'timestamp':   trade['timestamp'],

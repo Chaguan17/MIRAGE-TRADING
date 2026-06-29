@@ -93,10 +93,12 @@ const S = {
   },
 
   card: {
-    background: "#0b1120",
+    background: "rgba(11, 17, 32, 0.7)",
+    backdropFilter: "blur(12px)",
     padding: "2rem",
     borderRadius: "20px",
-    border: "1px solid #1e293b",
+    border: "1px solid rgba(255,255,255,0.05)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
   },
 
   grid: {
@@ -117,9 +119,16 @@ const S = {
   },
 
   desc: {
-    fontSize: "0.78rem",
-    color: "#64748b",
-    lineHeight: "1.5",
+    fontSize: "0.8rem",
+    color: "#94a3b8",
+    lineHeight: "1.4",
+    marginTop: "4px",
+    display: "flex",
+    gap: "6px",
+    background: "rgba(255,255,255,0.02)",
+    padding: "8px 10px",
+    borderRadius: "8px",
+    borderLeft: "2px solid #aa3bff"
   },
 
   inputWrapper: {
@@ -127,16 +136,17 @@ const S = {
   },
 
   input: {
-    background: "#121b2e",
-    border: "1px solid #334155",
+    background: "rgba(18, 27, 46, 0.8)",
+    border: "1px solid rgba(255,255,255,0.1)",
     color: "white",
-    padding: "11px 16px",
-    borderRadius: "10px",
-    fontSize: "0.9rem",
+    padding: "12px 16px",
+    borderRadius: "12px",
+    fontSize: "0.95rem",
     width: "100%",
     outline: "none",
     fontFamily: "JetBrains Mono, monospace",
     boxSizing: "border-box",
+    transition: "border 0.2s, box-shadow 0.2s",
   },
 
   unit: {
@@ -388,7 +398,7 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
     return (
       <div style={S.formGroup}>
         <label style={S.label}>{param.label}</label>
-        <p style={S.desc}>Pares que el bot monitorea. Añade nuevos o quita los activos.</p>
+        <div style={S.desc}>ℹ️ Pares que el bot monitorea. Añade nuevos o quita los activos.</div>
         
         {/* Tags de pares activos */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
@@ -459,7 +469,7 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
       >
         <div style={{ flex: 1, marginRight: "12px" }}>
           <label style={S.label}>{param.label}</label>
-          <p style={S.desc}>{param.description}</p>
+          {param.description && <div style={S.desc}>ℹ️ {param.description}</div>}
         </div>
         <button
           type="button"
@@ -479,6 +489,7 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
     return (
       <div style={S.formGroup}>
         <label style={S.label}>{param.label}</label>
+        {param.description && <div style={S.desc}>ℹ️ {param.description}</div>}
 
         <select
           value={rawValue || ""}
@@ -505,6 +516,7 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
     return (
       <div style={S.formGroup}>
         <label style={S.label}>{param.label}</label>
+        {param.description && <div style={S.desc}>ℹ️ {param.description}</div>}
 
         <input
           type="text"
@@ -526,8 +538,7 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
     <div style={S.formGroup}>
       <div>
         <label style={S.label}>{param.label}</label>
-
-        <p style={S.desc}>{param.description}</p>
+        {param.description && <div style={S.desc}>ℹ️ {param.description}</div>}
       </div>
 
       <div style={S.inputWrapper}>

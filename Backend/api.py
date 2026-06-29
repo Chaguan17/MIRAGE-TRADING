@@ -106,10 +106,19 @@ def _fetch_dashboard_data():
 
 		# 2. Cargar estado en vivo
 		try:
-			with open(cfg.LIVE_STATE_PATH, "r", encoding="utf-8") as f:
-				data = json.load(f)
+			import sqlite3
+			conn = sqlite3.connect(cfg.DB_PATH)
+			c = conn.cursor()
+			c.execute("SELECT state_json FROM system_state WHERE id = 1")
+			row = c.fetchone()
+			conn.close()
+			if row and row[0]:
+				data = json.loads(row[0])
 				_LAST_LIVE_STATE = data
-		except (FileNotFoundError, json.JSONDecodeError):
+			else:
+				data = _LAST_LIVE_STATE.copy()
+		except Exception as e:
+			logger.error(f"Error reading SQLite system_state: {e}")
 			data = _LAST_LIVE_STATE.copy()
 
 		# 3. Inyectar configuración y balance para el Dashboard
@@ -187,6 +196,41 @@ async def get_full_performance():
 		logger.error(f"Error reading full history: {e}")
 		return []
 
+class CommandInput(BaseModel):
+	action: str
+
+@app.post("/api/commands")
+def send_command(cmd: CommandInput):
+	command_path = os.path.join(cfg.STORAGE_DIR, "commands.json")
+	try:
+		with open(command_path, "w", encoding="utf-8") as f:
+			json.dump({"action": cmd.action, "timestamp": pd.Timestamp.utcnow().isoformat()}, f)
+		return {"status": "ok", "command": cmd.action}
+	except Exception as e:
+		return {"error": str(e)}
+
+@app.get("/api/chart/{symbol}")
+def get_chart_data(symbol: str):
+	import ccxt
+	try:
+		exchange = ccxt.binance({'options': {'defaultType': 'future'}})
+		with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
+			settings = json.load(f)
+		tf = settings.get("TIMEFRAME", "15m")
+		ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=200)
+		data = []
+		for row in ohlcv:
+			data.append({
+				"time": row[0] // 1000,
+				"open": row[1],
+				"high": row[2],
+				"low": row[3],
+				"close": row[4]
+			})
+		return data
+	except Exception as e:
+		logger.error(f"Error fetching chart data: {e}")
+		return []
 
 @app.get("/api/parameters")
 def get_parameters_metadata():
