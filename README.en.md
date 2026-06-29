@@ -1,6 +1,6 @@
-# 📊 DETAILED ANALYSIS: Mirage Trading
+# MIRAGE TRADING
 
-## 🎯 Executive Summary
+> Autonomous algorithmic trading bot for cryptocurrency futures
 
 **Mirage Trading** is an advanced algorithmic trading bot for cryptocurrency futures (Binance Futures) that combines:
 - **Machine Learning Ensemble** (Random Forest + XGBoost) as a prediction system.
@@ -16,16 +16,45 @@
 
 ---
 
-## 📁 Project Architecture
+##  Architecture
+
+### Decision Flow
 
 ```
-chaguan17-mirage-trading/
-├── Backend/          → Trading Engine (Python + FastAPI)
-├── Frontend/         → Dashboard (React + Vite)
-└── Config files      → Dependencies and configuration
+Binance OHLCV
+      │
+      ▼
+Data Engine ── 20+ features (RSI, EMA, ATR, BB, VWAP, Delta, SMC)
+      │
+      ▼
+BRAIN — 3 Signal Layers
+  BASIC (x1.0)       STRUCTURE (x1.2)     CONTEXT (x0.8)
+  Trend Follower     SMC Structure         OrderFlow
+  Mean Reversion     VWAP Method           Wyckoff
+  Breakout Logic     Liquidity Zones       BTC Correlation
+      │
+      ▼
+Consensus Engine (weighted voting + conflict detection)
+      │
+      ▼
+Veto System
+  · BTC Trend Veto
+  · Dynamic RSI Veto (volatility-adjusted thresholds)
+  · AI Probability Veto (blocks if success prob. < 40%)
+      │
+      ▼
+ML Engine — Random Forest
+  ai_weight grows gradually as trade history accumulates
+      │
+      ▼
+Adaptive Risk Manager
+  risk auto-adjusted to current available capital
+      │
+      ▼
+Executor DRY_RUN / REAL + SQLite Tracker + Live Dashboard
 ```
 
-### Tech Stack
+### File Structure
 
 **Backend:**
 - `fastapi` - REST API
@@ -67,18 +96,31 @@ The heart of the bot. It evaluates market conditions through three layers:
 - Replaced legacy JSON/CSV storage with a robust transactional SQLite database (`mirage_trading.db`).
 - **Auto-Tune Engine**: A standalone `optimizer.py` script uses Optuna and historical SQLite data to genetically find the most profitable hyper-parameters for the ML models.
 
----
+### 1. Multi-Layer Consensus with Conflict Detection
 
-## 💻 Professional Dashboard
+```python
+# If two opposing signals compete too closely, the layer returns None
+# instead of emitting a weak, unreliable signal
+if v_min > 0 and (v_min / v_max) > LAYER_CONFLICT_THRESHOLD:
+    return None, 0, 'Layer Conflict'
 
 - **TradingView Integration**: The old equity curve has been replaced by `TradingChart.jsx`, drawing real-time candlesticks, Entry levels, Take Profits, and Stop Losses explicitly on the chart.
 - **Bi-Directional Control**: Includes a "PANIC SELL" button to force-close the entire active fleet directly from the UI.
 - **Glassmorphism Settings**: Beautifully redesigned Settings UI allowing strategy toggling and parameter tweaking without touching any code.
 
----
+### 2. ML with Gradual Learning Curve
 
-## 🎲 Operational Flow
+The model does not interfere until it has enough experience. Its weight grows proportionally to the accumulated history:
 
+```python
+def calculate_ai_weight(self, trades_seen):
+    if trades_seen < MIN_TRADES_FOR_AI:
+        return 0.0  # No history → pure technical signals only
+    ratio = min(1.0, (trades_seen - MIN_TRADES_FOR_AI) / LEARNING_STEPS)
+    return ratio * AI_MAX_WEIGHT  # Maximum 40% influence
+
+# Final confidence: weighted blend of technical + AI
+confidence = (tech_conf * (1 - ai_weight)) + (ai_conf * ai_weight)
 ```
 [WebSocket Streams] + [Alternative Data] 
             ↓
@@ -93,7 +135,17 @@ The heart of the bot. It evaluates market conditions through three layers:
 
 ---
 
-## 🔐 Security & Safety
+## Quick Start
+
+```bash
+# Backend
+cd Backend
+pip install -r requirements.txt
+cp .env.example .env          # Add BINANCE_API_KEY + BINANCE_API_SECRET
+python main.py                # Bot starts in paper trading mode by default
+
+# API (separate terminal)
+uvicorn api:app --reload --port 8000
 
 - **Paper Trading by default**: Safe environment for AI learning.
 - **Margin Awareness**: The bot tracks used vs. available margin to prevent over-leveraging.
@@ -102,7 +154,7 @@ The heart of the bot. It evaluates market conditions through three layers:
 
 ---
 
-## 🎓 Conclusion
+## Configuration
 
 **Mirage Trading** has moved from an experimental setup to an institutional-grade algorithmic trading bot. The addition of XGBoost, Optuna, Alternative Data, SQLite, and WebSockets makes it extremely resilient and intelligent.
 
