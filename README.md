@@ -1,6 +1,6 @@
-# 📊 Mirage Trading — Algorithmic Trading Platform (Institutional Grade)
+# MIRAGE TRADING
 
-**Mirage Trading** es un motor de trading algorítmico autónomo de alto rendimiento diseñado para la especulación cuantitativa en contratos de futuros perpetuos (Binance Futures). El sistema integra modelos de Inteligencia Artificial cooperativos de última generación con análisis técnico multisegmento, gestión de riesgos adaptativa y persistencia de grado de producción para operar de forma robusta e ininterrumpida.
+> Bot de trading algorítmico autónomo para futuros de criptomonedas
 
 ---
 
@@ -13,16 +13,11 @@
 
 ---
 
-## 📁 Arquitectura del Proyecto
+##  Visión General
 
-```
-chaguan17-mirage-trading/
-├── Backend/          → Motor de trading (Python + FastAPI)
-├── Frontend/         → Dashboard (React + Vite)
-└── Config files      → Dependencias y configuración
-```
+**Mirage Trading** es un sistema completo de trading algorítmico que opera en **Binance Futures** de forma autónoma. Combina **9 estrategias técnicas** con un motor de **Machine Learning adaptativo** que aprende de cada operación, gestionando el riesgo de forma dinámica según el capital disponible en tiempo real.
 
-### Stack Tecnológico
+El sistema no depende de intervención humana. Analiza el mercado, toma decisiones, gestiona posiciones abiertas y se reentrena automáticamente cada noche.
 
 **Backend:**
 - `fastapi` - API REST
@@ -39,7 +34,7 @@ chaguan17-mirage-trading/
 - `lightweight-charts` - Gráficas de TradingView interactivas
 - `WebSockets` - Datos en tiempo real
 
----
+### Stack principal
 
 ## 🧠 Componentes Clave del Backend
 
