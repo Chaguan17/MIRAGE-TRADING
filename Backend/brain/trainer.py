@@ -18,9 +18,9 @@ class Trainer:
     def perform_nightly_retrain(self, symbol, db_path):
         """Reentrenamiento masivo con datos históricos usando validación Out-of-Sample."""
         try:
-            conn = sqlite3.connect(db_path)
-            query = f"SELECT * FROM trades WHERE pair = '{symbol}' AND result IN ('WIN', 'LOSS')"
-            df = pd.read_sql(query, conn)
+            conn = sqlite3.connect(db_path, timeout=15.0)
+            query = "SELECT * FROM trades WHERE pair = ? AND result IN ('WIN', 'LOSS')"
+            df = pd.read_sql(query, conn, params=(symbol,))
             conn.close()
 
             if len(df) < self.cfg.MIN_TRADES_FOR_AI:

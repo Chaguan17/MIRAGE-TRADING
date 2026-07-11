@@ -66,7 +66,7 @@ class MirageBrain:
     def _count_historical_trades(self):
         try:
             if os.path.exists(self.cfg.DB_PATH):
-                conn = sqlite3.connect(self.cfg.DB_PATH)
+                conn = sqlite3.connect(self.cfg.DB_PATH, timeout=15.0)
                 query = "SELECT COUNT(*) FROM trades WHERE pair = ?"
                 res = conn.execute(query, (self.symbol,)).fetchone()
                 conn.close()
@@ -117,7 +117,7 @@ class MirageBrain:
                 
         btc_action, _ = ctx.get('btc_corr', (None, 0))
         btc_row = btc_features.iloc[-1].to_dict() if btc_features is not None else None
-        market_veto = self.vetos.check_market_vetoes(tech_action, btc_action, btc_row)
+        market_veto = self.vetos.check_market_vetoes(tech_action, btc_action, btc_row, features_dict)
         if market_veto: return None, 0, market_veto, True
 
         # 4. Integración IA

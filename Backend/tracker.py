@@ -43,13 +43,14 @@ class TradeTracker:
 
         self._ensure_storage()
         self._load_historical_stats()
+        self._load_active_trades_from_file()
 
     def set_on_close_callback(self, fn):
         self._on_close_cb = fn
 
     def _ensure_storage(self):
         os.makedirs('storage', exist_ok=True)
-        conn   = sqlite3.connect(self.db_path)
+        conn   = sqlite3.connect(self.db_path, timeout=15.0)
         cursor = conn.cursor()
         cols   = []
         for col in self.COLUMNAS:
@@ -77,7 +78,7 @@ class TradeTracker:
 
     def _load_historical_stats(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=15.0)
             res  = conn.execute(
                 "SELECT COUNT(*), SUM(pnl_usdt), SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) "
                 "FROM trades WHERE pair = ?", (self.symbol,)
@@ -91,6 +92,27 @@ class TradeTracker:
             conn.close()
         except Exception as e:
             logger.error(f"Error cargando historial de {self.symbol}: {e}")
+
+    def _save_active_trades_to_file(self):
+        import json
+        path = os.path.join('storage', f'active_trades_{self.symbol}.json')
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(self.active_trades, f, indent=4)
+        except Exception as e:
+            logger.error(f"Error saving active trades for {self.symbol}: {e}")
+
+    def _load_active_trades_from_file(self):
+        import json
+        path = os.path.join('storage', f'active_trades_{self.symbol}.json')
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    self.active_trades = json.load(f)
+                logger.info(f"🔄 Restaurados {len(self.active_trades)} trades activos para {self.symbol} desde archivo.")
+            except Exception as e:
+                logger.error(f"Error loading active trades for {self.symbol}: {e}")
+                self.active_trades = []
 
     def register_trade(self, action, entry_price, size, sl, tp, features, use_sl):
         trade = {
@@ -106,6 +128,7 @@ class TradeTracker:
         }
         with self._trades_lock:
             self.active_trades.append(trade)
+            self._save_active_trades_to_file()
         sl_str = f"SL={sl:.4f}" if use_sl else "SIN SL"
         print(f"📝 {action} {self.symbol} @ {entry_price:.4f} | TP={tp:.4f} | {sl_str}")
 
@@ -169,6 +192,7 @@ class TradeTracker:
             with self._trades_lock:
                 if trade in self.active_trades:
                     self.active_trades.remove(trade)
+                    self._save_active_trades_to_file()
 
             emoji   = "🏆" if result == 'WIN' else "💀"
             sl_info = "(SL tocado)" if sl_was_hit else "(TP alcanzado)"
@@ -187,10 +211,21 @@ class TradeTracker:
             executor.execute_trade(api, self.symbol, side, trade['size'])
             
             self._save_to_db(trade, close_price, result, pnl, sl_was_hit=False)
-            self.active_trades.remove(trade)
+            with self._trades_lock:
+                if trade in self.active_trades:
+                    self.active_trades.remove(trade)
+                    self._save_active_trades_to_file()
             
             if self._on_close_cb:
-                self._on_close_cb(self.symbol, pnl, trade['size'], trade['entry_price'])
+                margin_released = (trade['size'] * trade['entry_price']) / config.LEVERAGE
+                self._on_close_cb(
+                    trade.get('_features', {}),
+                    result,
+                    sl_was_used=trade.get('use_sl', True),
+                    sl_was_hit=False,
+                    pnl=pnl,
+                    margin_released=margin_released
+                )
                 
     def _save_to_db(self, trade, close_price, result, pnl, sl_was_hit):
         row = {
@@ -206,7 +241,7 @@ class TradeTracker:
             'sl_was_hit':  int(sl_was_hit) if sl_was_hit is not None else 0,
             **{col: trade.get(col, 0) for col in self.FEATURE_COLS},
         }
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=15.0)
         cols         = ", ".join(row.keys())
         placeholders = ", ".join(["?"] * len(row))
         try:

@@ -1,5 +1,11 @@
 import time
 import os
+import sys
+
+# Forzar UTF-8 para evitar crashes con emojis en Windows PowerShell
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 import shutil
 import json
 import importlib
@@ -8,8 +14,6 @@ import config
 import brain
 import executor
 from binance_api import MirageBinance
-from backend.tracker import TradeTracker
-from backend.brain.ml_engine import ml_engine_instance
 from market_stream import stream_manager
 import data_engine as data_engine
 import risk_manager as risk_manager
@@ -141,7 +145,7 @@ def main():
     print("Descargando históricos iniciales para el caché RAM...")
     for sym in stream_manager.symbols:
         for tf in timeframes_to_track:
-            df = api.get_historical_data(sym.upper(), tf, limit=200)
+            df = api.get_historical_data(sym.upper(), tf, limit=1000)
             stream_manager.set_historical_cache(sym, tf, df)
     
     stream_manager.start()
@@ -200,6 +204,28 @@ def main():
                     bots[sym]["brain"] = brain.MirageBrain(symbol=sym)
                 cb = make_callback(sym, bots, api)
                 bots[sym]["tr"].set_on_close_callback(cb)
+
+            # ── Reinicializar MarketStream si los pares o timeframe cambiaron ──
+            new_timeframes = list(set([config.TIMEFRAME, "1h", "4h", "1m"]))
+            new_symbols = list(pares_activos)
+            if "BTCUSDT" not in new_symbols:
+                new_symbols.append("BTCUSDT")
+
+            old_syms = set(stream_manager.symbols)
+            new_syms = set(s.lower() for s in new_symbols)
+            old_tfs = set(stream_manager.timeframes)
+            new_tfs = set(new_timeframes)
+
+            if old_syms != new_syms or old_tfs != new_tfs:
+                print("🔄 Reiniciando MarketStream con nueva configuración...")
+                stream_manager.stop()
+                stream_manager.initialize(new_symbols, new_timeframes)
+                for sym in stream_manager.symbols:
+                    for tf in new_timeframes:
+                        df = api.get_historical_data(sym.upper(), tf, limit=1000)
+                        stream_manager.set_historical_cache(sym, tf, df)
+                stream_manager.start()
+
             print("✅ Flota actualizada.\n")
 
         account_balance = api.get_balance()
@@ -255,9 +281,16 @@ def main():
                     live_1h = stream_manager.get_data(sym, "1h")
                     live_4h = stream_manager.get_data(sym, "4h")
                     
+                    # Siempre actualizar last_price desde WebSocket aunque falle el resto
+                    if live_data is not None and not live_data.empty:
+                        b["last_price"] = float(live_data.iloc[-1]["close"])
+                    
                     if live_data is None:
                         continue
                     features = b["engine"].prepare_features(live_data, live_1h, live_4h)
+                    if features is None or features.empty:
+                        logger.warning(f"⚠️ Features vacías para {sym}. Saltando ciclo.")
+                        continue
 
                 b["consecutive_errors"] = 0
                 current_price = features.iloc[-1]["close"]
@@ -370,6 +403,7 @@ def main():
                     and confidence > config.MIN_CONFIDENCE
                     and len(b["tr"].active_trades) == 0
                     and b["cooldown_left"] == 0
+                    and use_sl  # Enforce SL safety: veto entry if AI predicts SL will be hit
                 )
 
                 if can_trade:
@@ -519,7 +553,7 @@ def main():
             }
             import sqlite3
             import json
-            conn = sqlite3.connect(config.DB_PATH)
+            conn = sqlite3.connect(config.DB_PATH, timeout=15.0)
             c = conn.cursor()
             c.execute('CREATE TABLE IF NOT EXISTS system_state (id INTEGER PRIMARY KEY, state_json TEXT)')
             c.execute('INSERT OR REPLACE INTO system_state (id, state_json) VALUES (1, ?)', (json.dumps(estado),))
@@ -528,7 +562,7 @@ def main():
         except Exception as e:
             logger.error(f"Error actualizando dashboard: {e}")
 
-        time.sleep(5)
+        time.sleep(2)
 
 
 if __name__ == "__main__":

@@ -40,9 +40,9 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None):
         # Orden de mercado principal
         order = client.client.create_order(
             symbol=symbol,
-            side=side.upper(),
             type='MARKET',
-            quantity=size,
+            side=side.upper(),
+            amount=size,
         )
         logger.info(f"✅ Orden ejecutada: {side.upper()} {size} {symbol} | ID: {order.get('orderId')}")
 
@@ -51,10 +51,13 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None):
             sl_side = 'sell' if action == 'LONG' else 'buy'
             client.client.create_order(
                 symbol=symbol,
-                side=sl_side.upper(),
                 type='STOP_MARKET',
-                stopPrice=round(sl, 2),
-                closePosition=True,
+                side=sl_side.upper(),
+                amount=size,
+                params={
+                    'stopPrice': round(sl, 2),
+                    'closePosition': True
+                }
             )
             logger.info(f"🛡️  SL colocado en {sl}")
 
@@ -63,10 +66,13 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None):
             tp_side = 'sell' if action == 'LONG' else 'buy'
             client.client.create_order(
                 symbol=symbol,
-                side=tp_side.upper(),
                 type='TAKE_PROFIT_MARKET',
-                stopPrice=round(tp, 2),
-                closePosition=True,
+                side=tp_side.upper(),
+                amount=size,
+                params={
+                    'stopPrice': round(tp, 2),
+                    'closePosition': True
+                }
             )
             logger.info(f"🎯 TP colocado en {tp}")
 
@@ -97,10 +103,12 @@ def close_position(client, symbol, action, size):
     try:
         order = client.client.create_order(
             symbol=symbol,
-            side=close_side.upper(),
             type='MARKET',
-            quantity=size,
-            reduceOnly=True,
+            side=close_side.upper(),
+            amount=size,
+            params={
+                'reduceOnly': True
+            }
         )
         logger.info(f"✅ Posición cerrada: {symbol} | ID: {order.get('orderId')}")
         return order

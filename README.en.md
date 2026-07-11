@@ -1,18 +1,15 @@
-# 📊 DETAILED ANALYSIS: Mirage Trading
+# 📊 Mirage Trading — Algorithmic Trading Platform (Institutional Grade)
 
-## 🎯 Executive Summary
+**Mirage Trading** is a high-performance autonomous algorithmic trading engine designed for quantitative speculation on perpetual futures contracts (Binance Futures). The system integrates state-of-the-art cooperative Artificial Intelligence models with multi-segment technical analysis, adaptive risk management, and production-grade persistence to trade robustly and uninterruptedly.
 
-**Mirage Trading** is an advanced algorithmic trading bot for cryptocurrency futures (Binance Futures) that combines:
-- **Machine Learning Ensemble** (Random Forest + XGBoost) as a prediction system.
-- **9 integrated technical strategies**.
-- **Alternative Data** (Funding Rate, Fear & Greed Index).
-- **Paper Trading** for safe simulation.
-- **Real-time Dashboard** for monitoring (TradingView charts).
-- **SQLite Database** for persistence and data integrity.
-- **Native WebSockets** (Zero latency).
-- Modular Python + React architecture.
+---
 
-**Status:** Sprint 4 Completed (Institutional AI Evolution and Scalability)
+## 🎯 Core Pillars
+
+* **Cooperative AI Ensemble:** Implements a hybrid `VotingClassifier` (Random Forest + XGBoost) auto-optimized via genetic algorithms (`Optuna`) that acts as a probabilistic validator of technical entries, reducing false signals to historic lows.
+* **Multidimensional Technical Consensus:** Evaluates market conditions through 9 independent modular strategies (SMC, Wyckoff, Orderflow Delta, ATR Volatility, Price Action) across synchronized timeframes (15m, 1h, 4h) to ensure the bot only operates in the direction of the macro trend.
+* **Augmented Data Processing:** Combines pure market metrics with **Alternative Data** (real-time Funding Rates and the global Fear & Greed index) to capture both technical liquidity and institutional sentiment/positioning.
+* **Production-Grade Concurrency & Mitigation:** Shielded against database write locks using dynamic connection queue queuing (`SQLite timeout`), credentials sanitization to prevent leaks, and automatic active trades JSON serialization for state survival during restarts.
 
 ---
 
@@ -77,28 +74,49 @@ The heart of the bot. It evaluates market conditions through three layers:
 
 ---
 
-## 🎲 Operational Flow
+## 🔄 Operational Process Flow
 
-```
-[WebSocket Streams] + [Alternative Data] 
-            ↓
-       [Data Engine] 
-            ↓
-[9 Strategies + Ensemble ML Engine]
-            ↓
-     [Risk & Margin Check]
-            ↓
-    [Execution & SQLite Tracking]
+The bot runs a continuous real-time decision loop structured into the following operational phases:
+
+```mermaid
+graph TD
+    %% Ingestion
+    A1["Binance WebSockets <br> (Klines, Ticks, Mark Price)"] --> B["1. Data Engine <br> (Ingestion & Indicators)"]
+    A2["Alternative Data APIs <br> (Fear & Greed, Funding Rate)"] --> B
+    
+    %% Warm-up
+    B -->|"Warm Cache <br> (1000 Warm-up Candles)"| C["2. Brain: Technical Consensus <br> (9 SMC/Wyckoff Strategies)"]
+    
+    %% Intelligence
+    C -->|"Consensus Signal"| D["3. ML Ensemble <br> (VotingClassifier: RF + XGB)"]
+    
+    %% Risk Validation
+    D -->|"Probabilistic Validation"| E["4. Veto & Risk Manager <br> (Macro Veto, Dynamic RSI, ATR Sizing)"]
+    
+    %% Order Execution
+    E -->|"Order Execution"| F["5. Executor <br> (CCXT API / Dry Run)"]
+    
+    %% Log & Interface
+    F --> G["6. SQLite Tracker & Persistence <br> (mirage_trading.db, active_trades.json)"]
+    G -->|"WebSockets Broadcast"| H["Vite React Dashboard <br> (lightweight-charts)"]
+    G -->|"Feedback Loop (Retrain)"| D
 ```
 
 ---
 
-## 🔐 Security & Safety
+## 🔐 Security, Concurrency & Stability (Senior Audit Overhaul)
 
-- **Paper Trading by default**: Safe environment for AI learning.
-- **Margin Awareness**: The bot tracks used vs. available margin to prevent over-leveraging.
-- **Sleep Cycles**: Automatic nightly maintenance.
-- **Hot-Reload**: Parameters can be updated from the UI without stopping the engine.
+The bot has been shielded against production operational issues and security vulnerabilities:
+- **Credential Masking:** Automatically masks private `API_KEY` and `API_SECRET` (`********`) in REST API and WebSockets dashboard payloads to prevent credential leaks.
+- **Active Trades File-Based Persistence:** The tracker serializes the state of open positions in real-time to local JSON files (`storage/active_trades_{symbol}.json`). Upon restart, the bot automatically restores these positions, preventing them from being orphaned in the exchange.
+- **SQLite Concurrency Lock Mitigation:** Added `timeout=15.0` to all database connections in the bot and API, allowing multi-process database queues without concurrent locking crashes.
+- **SQL Injection Prevention:** Sanitized and parameterized database queries in `trainer.py` using native placeholders (`params=(symbol,)`).
+- **Robust Indicator Warm-up:** Increased the initial historical candle limits from 200 to 1000. This ensures indicator warm-up for `EMA_200` and `VWAP_100` does not empty RAM caches, allowing new pairs to be processed with maximum precision.
+- **Core Protections:**
+  - **Paper Trading by default**: Safe environment for AI learning.
+  - **Margin Awareness**: The bot tracks used vs. available margin to prevent over-leveraging.
+  - **Sleep Cycles**: Automatic nightly maintenance.
+  - **Hot-Reload**: Parameters can be updated from the UI without stopping the engine.
 
 ---
 

@@ -127,3 +127,8 @@ body {
 .mono-text-bold { font-family: var(--font-mono); font-weight: 700; }
 .text-success { color: var(--success) !important; }
 .text-danger { color: var(--danger) !important; }
+
+/* ── Chart spinner ── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

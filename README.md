@@ -1,18 +1,15 @@
-# 📊 ANÁLISIS DETALLADO: Mirage Trading
+# 📊 Mirage Trading — Algorithmic Trading Platform (Institutional Grade)
 
-## 🎯 Resumen Ejecutivo
+**Mirage Trading** es un motor de trading algorítmico autónomo de alto rendimiento diseñado para la especulación cuantitativa en contratos de futuros perpetuos (Binance Futures). El sistema integra modelos de Inteligencia Artificial cooperativos de última generación con análisis técnico multisegmento, gestión de riesgos adaptativa y persistencia de grado de producción para operar de forma robusta e ininterrumpida.
 
-**Mirage Trading** es un bot de trading algorítmico avanzado para futuros de criptomonedas (Binance Futures) que combina:
-- **Machine Learning Ensemble** (Random Forest + XGBoost) como sistema de predicción.
-- **9 estrategias técnicas** diferentes integradas.
-- **Datos Alternativos** (Funding Rate, Fear & Greed Index).
-- **Paper Trading** para simulación segura.
-- **Dashboard en tiempo real** para monitoreo (TradingView charts).
-- **Base de Datos SQLite** para persistencia e integridad.
-- **WebSockets Nativos** (Latencia cero)
-- Arquitectura modular Python + React.
+---
 
-**Estado:** Sprint 4 Completado (Evolución Institucional de la IA y Escalabilidad)
+## 🎯 Pilares del Sistema
+
+* **Ensamble de IA Cooperativo:** Implementa un `VotingClassifier` híbrido (Random Forest + XGBoost) auto-optimizado mediante algoritmos genéticos (`Optuna`) que actúa como validador probabilístico de las entradas técnicas, reduciendo las señales falsas a mínimos históricos.
+* **Consenso Técnico Multidimensional:** Evalúa el mercado a través de 9 estrategias modulares independientes (SMC, Wyckoff, Orderflow Delta, Volatilidad ATR, Acción del Precio) sobre timeframes sincronizados (15m, 1h, 4h) para asegurar que el bot opera solo a favor de la tendencia macro.
+* **Procesamiento de Datos Aumentado:** Combina métricas puras de mercado con **Datos Alternativos** (Funding Rates en tiempo real e índice de Fear & Greed) para capturar tanto la liquidez técnica como el sentimiento y posicionamiento institucional.
+* **Mitigación y Resiliencia en Producción:** Blindado contra problemas concurrentes de escritura en base de datos mediante encolamiento dinámico (timeout de SQLite), sanitización de API Keys contra fugas y restauración automática de posiciones abiertas mediante almacenamiento persistente JSON ante caídas de servicio.
 
 ---
 
@@ -91,6 +88,17 @@ Aparte del análisis técnico clásico (RSI, EMA, ATR, MACD, Orderflow, Wyckoff)
 
 ---
 
+## 🔐 Seguridad, Concurrencia y Estabilidad (Auditoría Senior)
+
+El bot ha sido blindado contra fallas operativas y vulnerabilidades comunes en entornos de producción:
+- **Protección de Credenciales (Masking):** Enmascaramiento automático de las llaves `API_KEY` y `API_SECRET` (`********`) en las respuestas JSON de la API REST y del WebSocket del dashboard para prevenir fugas accidentales.
+- **Persistencia de Operaciones Activas:** El tracker ahora guarda en tiempo real el estado de las posiciones abiertas en archivos locales JSON en `storage/active_trades_{symbol}.json`. Al reiniciarse, el bot recupera estas posiciones automáticamente evitando que queden huérfanas en el exchange.
+- **Mitigación de Bloqueos en SQLite:** Configurado un `timeout=15.0` en todas las conexiones a la base de datos `mirage_trading.db` en el bot y en la API, permitiendo lecturas/escrituras multiproceso encoladas de forma segura.
+- **Prevención de Inyección SQL:** Sanitización y parametrización de las consultas en el reentrenamiento nocturno (`trainer.py`) utilizando parámetros de enlace nativos (`params=(symbol,)`).
+- **Warm-up de Datos Robusto:** Incrementado el límite de descarga de velas inicial de 200 a 1000. Esto asegura que la limpieza de celdas vacías (`dropna`) no vacíe la memoria RAM de indicadores críticos como `EMA_200` y `VWAP_100`, permitiendo que los nuevos pares se evalúen con total precisión.
+
+---
+
 ## 🚀 Estado del Desarrollo
 
 ### ✅ SPRINT 1, 2 & 3: COMPLETADO
@@ -108,22 +116,32 @@ Aparte del análisis técnico clásico (RSI, EMA, ATR, MACD, Orderflow, Wyckoff)
 
 ---
 
-## 🎲 Flujo de Operación
+## 🔄 Flujo del Proceso Operativo
 
-```
-[Binance Streams] + [Alternative Data] 
-            ↓
-       [Data Engine] 
-            ↓
-  [Brain (9 estrategias)] 
-            ↓
- [Voting Classifier (RF + XGB)]
-            ↓
-      [Risk Manager]
-            ↓
-   [Executor] → [SQLite]
-            ↓
-  [TradingView Dashboard]
+El bot ejecuta un bucle de decisión continuo en tiempo real estructurado en las siguientes fases:
+
+```mermaid
+graph TD
+    %% Ingesta
+    A1["Binance WebSockets <br> (Klines, Ticks, Mark Price)"] --> B["1. Data Engine <br> (Ingesta e Indicadores)"]
+    A2["Alternative Data APIs <br> (Fear & Greed, Funding Rate)"] --> B
+    
+    %% Preparación
+    B -->|"Caché Cálido <br> (1000 velas de Warm-up)"| C["2. Brain: Consenso Técnico <br> (9 Estrategias SMC/Wyckoff)"]
+    
+    %% Filtro Inteligente
+    C -->|"Señal Consensuada"| D["3. ML Ensemble <br> (VotingClassifier: RF + XGB)"]
+    
+    %% Gestión y Validación
+    D -->|"Filtro Probabilístico"| E["4. Veto & Risk Manager <br> (Macro Veto, RSI Dinámico, ATR Sizing)"]
+    
+    %% Ordenes
+    E -->|"Ejecución de Orden"| F["5. Executor <br> (CCXT API / Dry Run)"]
+    
+    %% Almacenamiento y UI
+    F --> G["6. SQLite Tracker & Persistence <br> (mirage_trading.db, active_trades.json)"]
+    G -->|"WebSockets Broadcast"| H["Vite React Dashboard <br> (lightweight-charts)"]
+    G -->|"Feedback Loop (Retrain)"| D
 ```
 
 ---
