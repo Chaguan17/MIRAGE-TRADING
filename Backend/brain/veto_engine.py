@@ -8,17 +8,18 @@ class VetoEngine:
         self.symbol = symbol
         self.cfg = config
 
-    def check_market_vetoes(self, tech_action, btc_action, btc_row):
+    def check_market_vetoes(self, tech_action, btc_action, btc_row, local_row):
         """Vetos basados en contexto de mercado (BTC, RSI)."""
         # Veto de BTC
         if self.symbol != "BTCUSDT" and btc_action is not None:
             if tech_action != btc_action:
                 return 'BTC Trend Veto'
 
-        # Veto de RSI Dinámico
-        if btc_row is not None and 'RSI' in btc_row and 'ATR_pct' in btc_row:
-            rsi = btc_row['RSI']
-            vol = btc_row['ATR_pct']
+        # Veto de RSI Dinámico (evaluado sobre el activo local)
+        if local_row is not None and 'RSI' in local_row and 'ATR_pct' in local_row:
+            rsi = local_row['RSI']
+            vol = local_row['ATR_pct']
+            import pandas as pd
             if not pd.isna(rsi) and not pd.isna(vol):
                 vol_diff = vol - self.cfg.RSI_VOL_REF
                 adjustment = vol_diff * self.cfg.RSI_VOL_ADJUSTMENT_FACTOR

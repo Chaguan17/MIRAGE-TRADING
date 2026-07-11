@@ -28,7 +28,7 @@ def load_trading_history():
         return None
         
     try:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=15.0)
         # Cargamos trades cerrados (asumiendo exit_time is not null)
         df = pd.read_sql("SELECT * FROM trades WHERE exit_time IS NOT NULL", conn)
         conn.close()

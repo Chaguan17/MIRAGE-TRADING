@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import pandas as pd
@@ -60,13 +60,13 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 async def dashboard_broadcaster():
-	"""Ciclo centralizado que hace push de actualizaciones cada 2 segundos."""
+	"""Ciclo centralizado que hace push de actualizaciones cada segundo."""
 	while True:
 		if manager.active_connections:
             # Ejecutamos la carga de datos (síncrona) en un hilo aparte para no bloquear
 			payload = await asyncio.to_thread(_fetch_dashboard_data)
 			await manager.broadcast(payload)
-		await asyncio.sleep(2)
+		await asyncio.sleep(1)
 
 if not os.path.exists(cfg.SETTINGS_PATH):
 	default_settings = {
@@ -91,6 +91,28 @@ _LAST_HISTORY_STATE = {
 	"chart_data": [], "ultimas_operaciones": []
 }
 
+def sanitize_config(config_dict):
+	sanitized = config_dict.copy()
+	if "API_KEY" in sanitized:
+		val = sanitized["API_KEY"]
+		sanitized["API_KEY"] = "********" + val[-5:] if (val and len(val) > 5) else ""
+	if "API_SECRET" in sanitized:
+		val = sanitized["API_SECRET"]
+		sanitized["API_SECRET"] = "********" + val[-5:] if (val and len(val) > 5) else ""
+	return sanitized
+
+API_SECRET_TOKEN = os.getenv("API_SECRET_TOKEN", "").strip()
+
+async def verify_auth(authorization: str = Header(None), token: str = Query(None)):
+	if API_SECRET_TOKEN:
+		provided = None
+		if authorization and authorization.startswith("Bearer "):
+			provided = authorization.split(" ")[1]
+		elif token:
+			provided = token
+		if provided != API_SECRET_TOKEN:
+			raise HTTPException(status_code=401, detail="Unauthorized")
+
 def _fetch_dashboard_data():
 	"""Lógica centralizada para obtener métricas, usada por REST y WebSockets."""
 	global _LAST_LIVE_STATE, _LAST_HISTORY_STATE
@@ -107,7 +129,7 @@ def _fetch_dashboard_data():
 		# 2. Cargar estado en vivo
 		try:
 			import sqlite3
-			conn = sqlite3.connect(cfg.DB_PATH)
+			conn = sqlite3.connect(cfg.DB_PATH, timeout=15.0)
 			c = conn.cursor()
 			c.execute("SELECT state_json FROM system_state WHERE id = 1")
 			row = c.fetchone()
@@ -122,7 +144,7 @@ def _fetch_dashboard_data():
 			data = _LAST_LIVE_STATE.copy()
 
 		# 3. Inyectar configuración y balance para el Dashboard
-		data["config"] = current_config
+		data["config"] = sanitize_config(current_config)
 		
 		if "balance_actual" not in data or data["balance_actual"] == 0:
 			data["balance_actual"] = current_config.get("PAPER_BALANCE", 0)
@@ -164,12 +186,12 @@ def _fetch_dashboard_data():
 		return {"error": str(e)}
 
 @app.get("/api/dashboard")
-def get_dashboard_data():
+def get_dashboard_data(_ = Depends(verify_auth)):
 	"""Mantiene compatibilidad con polling o carga inicial."""
 	return _fetch_dashboard_data()
 
 @app.websocket("/ws/dashboard")
-async def dashboard_websocket(websocket: WebSocket):
+async def dashboard_websocket(websocket: WebSocket, _ = Depends(verify_auth)):
 	"""Suspensión de WebSocket para actualizaciones en tiempo real."""
 	await manager.connect(websocket)
 	try:
@@ -181,11 +203,11 @@ async def dashboard_websocket(websocket: WebSocket):
 		manager.disconnect(websocket)
 
 @app.get("/api/performance")
-async def get_full_performance():
+async def get_full_performance(_ = Depends(verify_auth)):
 	"""Devuelve el historial completo de operaciones para análisis profundo."""
 	try:
 		if os.path.exists(cfg.DB_PATH):
-			conn = sqlite3.connect(cfg.DB_PATH)
+			conn = sqlite3.connect(cfg.DB_PATH, timeout=15.0)
 			df = pd.read_sql("SELECT * FROM trades ORDER BY timestamp ASC", conn)
 			conn.close()
 			data = df.to_dict(orient="records")
@@ -200,7 +222,7 @@ class CommandInput(BaseModel):
 	action: str
 
 @app.post("/api/commands")
-def send_command(cmd: CommandInput):
+def send_command(cmd: CommandInput, _ = Depends(verify_auth)):
 	command_path = os.path.join(cfg.STORAGE_DIR, "commands.json")
 	try:
 		with open(command_path, "w", encoding="utf-8") as f:
@@ -210,13 +232,14 @@ def send_command(cmd: CommandInput):
 		return {"error": str(e)}
 
 @app.get("/api/chart/{symbol}")
-def get_chart_data(symbol: str):
+def get_chart_data(symbol: str, tf: str = None, _ = Depends(verify_auth)):
 	import ccxt
 	try:
 		exchange = ccxt.binance({'options': {'defaultType': 'future'}})
-		with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
-			settings = json.load(f)
-		tf = settings.get("TIMEFRAME", "15m")
+		if not tf:
+			with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
+				settings = json.load(f)
+			tf = settings.get("TIMEFRAME", "15m")
 		ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=200)
 		data = []
 		for row in ohlcv:
@@ -225,7 +248,8 @@ def get_chart_data(symbol: str):
 				"open": row[1],
 				"high": row[2],
 				"low": row[3],
-				"close": row[4]
+				"close": row[4],
+				"volume": row[5]
 			})
 		return data
 	except Exception as e:
@@ -245,10 +269,10 @@ def get_parameters_metadata():
 		return {}
 
 @app.get("/api/config")
-def get_config():
+def get_config(_ = Depends(verify_auth)):
 	try:
 		with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
-			return json.load(f)
+			return sanitize_config(json.load(f))
 	except FileNotFoundError:
 		logger.error(f"Config file not found at {cfg.SETTINGS_PATH}")
 		return {}
@@ -296,7 +320,7 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	MIN_SIZE_USDT: float | None = Field(None, ge=0)
 
 @app.post("/api/config") # Modificado: Usa el modelo ConfigUpdate para validación
-def update_config(new_settings: ConfigUpdate): 
+def update_config(new_settings: ConfigUpdate, _ = Depends(verify_auth)): 
 	logger.info(f"Recibida actualización de config: {new_settings}")
 	try:
 		current = cfg.load_dynamic_settings()

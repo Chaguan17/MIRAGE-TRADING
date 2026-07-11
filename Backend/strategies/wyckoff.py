@@ -16,8 +16,9 @@ def analyze(features):
     vol   = window['volume'].values
     price = close[-1]
 
-    range_high = high.max()
-    range_low  = low.min()
+    # Excluir las últimas 5 velas del rango histórico para permitir quiebres (Spring/Upthrust)
+    range_high = high[:-5].max()
+    range_low  = low[:-5].min()
     range_pct  = (range_high - range_low) / price * 100
 
     x         = np.arange(len(close))

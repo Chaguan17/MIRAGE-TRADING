@@ -2,17 +2,16 @@
 
 > Autonomous algorithmic trading bot for cryptocurrency futures
 
-**Mirage Trading** is an advanced algorithmic trading bot for cryptocurrency futures (Binance Futures) that combines:
-- **Machine Learning Ensemble** (Random Forest + XGBoost) as a prediction system.
-- **9 integrated technical strategies**.
-- **Alternative Data** (Funding Rate, Fear & Greed Index).
-- **Paper Trading** for safe simulation.
-- **Real-time Dashboard** for monitoring (TradingView charts).
-- **SQLite Database** for persistence and data integrity.
-- **Native WebSockets** (Zero latency).
-- Modular Python + React architecture.
+**Mirage Trading** is a high-performance autonomous algorithmic trading engine designed for quantitative speculation on perpetual futures contracts (Binance Futures). The system integrates state-of-the-art cooperative Artificial Intelligence models with multi-segment technical analysis, adaptive risk management, and production-grade persistence to trade robustly and uninterruptedly.
 
-**Status:** Sprint 4 Completed (Institutional AI Evolution and Scalability)
+---
+
+## 🎯 Core Pillars
+
+* **Cooperative AI Ensemble:** Implements a hybrid `VotingClassifier` (Random Forest + XGBoost) auto-optimized via genetic algorithms (`Optuna`) that acts as a probabilistic validator of technical entries, reducing false signals to historic lows.
+* **Multidimensional Technical Consensus:** Evaluates market conditions through 9 independent modular strategies (SMC, Wyckoff, Orderflow Delta, ATR Volatility, Price Action) across synchronized timeframes (15m, 1h, 4h) to ensure the bot only operates in the direction of the macro trend.
+* **Augmented Data Processing:** Combines pure market metrics with **Alternative Data** (real-time Funding Rates and the global Fear & Greed index) to capture both technical liquidity and institutional sentiment/positioning.
+* **Production-Grade Concurrency & Mitigation:** Shielded against database write locks using dynamic connection queue queuing (`SQLite timeout`), credentials sanitization to prevent leaks, and automatic active trades JSON serialization for state survival during restarts.
 
 ---
 
@@ -108,19 +107,10 @@ if v_min > 0 and (v_min / v_max) > LAYER_CONFLICT_THRESHOLD:
 - **Bi-Directional Control**: Includes a "PANIC SELL" button to force-close the entire active fleet directly from the UI.
 - **Glassmorphism Settings**: Beautifully redesigned Settings UI allowing strategy toggling and parameter tweaking without touching any code.
 
-### 2. ML with Gradual Learning Curve
+---
 
-The model does not interfere until it has enough experience. Its weight grows proportionally to the accumulated history:
+## 🎲 Operational Flow
 
-```python
-def calculate_ai_weight(self, trades_seen):
-    if trades_seen < MIN_TRADES_FOR_AI:
-        return 0.0  # No history → pure technical signals only
-    ratio = min(1.0, (trades_seen - MIN_TRADES_FOR_AI) / LEARNING_STEPS)
-    return ratio * AI_MAX_WEIGHT  # Maximum 40% influence
-
-# Final confidence: weighted blend of technical + AI
-confidence = (tech_conf * (1 - ai_weight)) + (ai_conf * ai_weight)
 ```
 [WebSocket Streams] + [Alternative Data] 
             ↓
@@ -135,17 +125,7 @@ confidence = (tech_conf * (1 - ai_weight)) + (ai_conf * ai_weight)
 
 ---
 
-## Quick Start
-
-```bash
-# Backend
-cd Backend
-pip install -r requirements.txt
-cp .env.example .env          # Add BINANCE_API_KEY + BINANCE_API_SECRET
-python main.py                # Bot starts in paper trading mode by default
-
-# API (separate terminal)
-uvicorn api:app --reload --port 8000
+## 🔐 Security & Safety
 
 - **Paper Trading by default**: Safe environment for AI learning.
 - **Margin Awareness**: The bot tracks used vs. available margin to prevent over-leveraging.

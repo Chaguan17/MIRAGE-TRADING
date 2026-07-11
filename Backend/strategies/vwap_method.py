@@ -7,20 +7,27 @@ import config
 
 
 def analyze(features):
-    if len(features) < 20:
+    if len(features) < 100 or 'VWAP' not in features.columns:
         return None, 0
+
+    import pandas as pd
 
     close = features['close'].values
     high  = features['high'].values
     low   = features['low'].values
     vol   = features['volume'].values
 
-    typical_price = (high + low + close) / 3
-    cum_tp_vol    = np.cumsum(typical_price * vol)
-    cum_vol       = np.cumsum(vol)
-    vwap          = cum_tp_vol / (cum_vol + 1e-9)
+    # Obtener el VWAP alineado de 100 periodos precalculado por el DataEngine
+    vwap = features['VWAP'].values
 
-    variance   = np.cumsum(vol * (typical_price - vwap) ** 2) / (cum_vol + 1e-9)
+    # Calcular desviación estándar rodante de 100 periodos ponderada por volumen
+    typical_price = (high + low + close) / 3
+    vol_diff_sq = vol * (typical_price - vwap) ** 2
+    
+    rolling_vol_diff_sq = pd.Series(vol_diff_sq).rolling(100, min_periods=1).sum().values
+    rolling_vol = pd.Series(vol).rolling(100, min_periods=1).sum().values
+    
+    variance   = rolling_vol_diff_sq / (rolling_vol + 1e-9)
     std_dev    = np.sqrt(np.abs(variance))
     upper_band = vwap + (config.VWAP_BAND_MULT * std_dev)
     lower_band = vwap - (config.VWAP_BAND_MULT * std_dev)

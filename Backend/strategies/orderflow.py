@@ -1,5 +1,5 @@
 def analyze(features):
-    if len(features) < 10:
+    if len(features) < 11:
         return None, 0
 
     df    = features.copy()

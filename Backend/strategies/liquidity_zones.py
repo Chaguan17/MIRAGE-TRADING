@@ -54,8 +54,8 @@ def analyze(features):
     round_level  = round(price / step) * step
     psych_levels = [round_level - step, round_level, round_level + step]
 
-    all_highs = liq_highs + [l for l in psych_levels if l > price]
-    all_lows  = liq_lows  + [l for l in psych_levels if l < price]
+    all_highs = [h for h in liq_highs if h > price] + [l for l in psych_levels if l > price]
+    all_lows  = [l for l in liq_lows if l < price]  + [l for l in psych_levels if l < price]
 
     if not all_highs or not all_lows:
         return None, 0

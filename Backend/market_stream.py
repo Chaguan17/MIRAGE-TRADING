@@ -29,6 +29,9 @@ class MarketStream:
         self.ws = None
         self.ws_thread = None
         self.is_running = False
+        self.stop_event = threading.Event()
+        self.use_spot_fallback = False
+        self.message_count = 0
 
     def initialize(self, symbols, timeframes):
         self.symbols = [s.lower() for s in symbols]
@@ -46,40 +49,69 @@ class MarketStream:
             return
 
         self.is_running = True
-        streams = []
-        for sym in self.symbols:
-            # Candlesticks
-            for tf in self.timeframes:
-                streams.append(f"{sym}@kline_{tf}")
-            # Alternative Data
-            streams.append(f"{sym}@markPrice")
-            # Open Interest stream might not be widely available on all Binance versions but we try
-            # Binance Futures uses <symbol>@openInterest but sometimes @markPrice is enough
-            
-        url = f"wss://fstream.binance.com/stream?streams={'/'.join(streams)}"
-        logger.info(f"Conectando a Binance Streams: {url}")
-        
-        self.ws = websocket.WebSocketApp(
-            url,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
-            on_open=self._on_open
-        )
+        self.stop_event.clear()
         self.ws_thread = threading.Thread(target=self._run_ws, daemon=True)
         self.ws_thread.start()
 
     def _run_ws(self):
         while self.is_running:
-            self.ws.run_forever()
+            self.message_count = 0
+            
+            streams = []
+            for sym in self.symbols:
+                for tf in self.timeframes:
+                    streams.append(f"{sym}@kline_{tf}")
+                if not self.use_spot_fallback:
+                    streams.append(f"{sym}@markPrice")
+                else:
+                    streams.append(f"{sym}@miniTicker")
+            
+            base_url = "wss://stream.binance.com/stream" if self.use_spot_fallback else "wss://fstream.binance.com/stream"
+            url = f"{base_url}?streams={'/'.join(streams)}"
+            logger.info(f"Conectando a Binance Streams ({'Spot Fallback' if self.use_spot_fallback else 'Futures'}): {url}")
+            
+            self.ws = websocket.WebSocketApp(
+                url,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+                on_open=self._on_open
+            )
+            
+            ws_conn_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
+            ws_conn_thread.start()
+            
+            # Wait 6 seconds and check if messages arrived (if not on fallback yet)
+            if not self.use_spot_fallback:
+                self.stop_event.wait(timeout=6)
+                if self.is_running and self.message_count == 0:
+                    logger.warning("⚠️ No se recibieron mensajes en Futures WS en 6s. Activando Fallback a Spot WS...")
+                    self.use_spot_fallback = True
+                    try:
+                        self.ws.close()
+                    except Exception:
+                        pass
+                    ws_conn_thread.join(timeout=1.0)
+                    continue # Reconnect using fallback
+            
+            # Wait until closed or stopped
+            while self.is_running and ws_conn_thread.is_alive():
+                self.stop_event.wait(timeout=2)
+                
             if self.is_running:
                 logger.info("Reconectando MarketStream en 5 segundos...")
-                time.sleep(5)
+                self.stop_event.wait(timeout=5)
 
     def stop(self):
         self.is_running = False
+        self.stop_event.set()
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+        if self.ws_thread and self.ws_thread.is_alive():
+            self.ws_thread.join(timeout=2.0)
 
     def _on_open(self, ws):
         logger.info("MarketStream conectado a Binance.")
@@ -92,6 +124,7 @@ class MarketStream:
 
     def _on_message(self, ws, message):
         try:
+            self.message_count += 1
             data = json.loads(message)
             if 'data' not in data:
                 return
