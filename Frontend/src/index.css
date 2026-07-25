@@ -41,6 +41,13 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
+/* Dropdown Select & Option Items Readability */
+select option {
+  background-color: #0b1120 !important;
+  color: #f8fafc !important;
+  padding: 8px 12px;
+}
+
 /* Contenedor Principal */
 .app-container {
   max-width: 1600px;

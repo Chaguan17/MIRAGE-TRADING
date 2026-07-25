@@ -122,7 +122,10 @@ def main():
     bots = {}
     for sym in pares_activos:
         print(f"⚙️  Construyendo motor para {sym}...")
-        api.setup_symbol(sym, config.LEVERAGE)
+        if not api.setup_symbol(sym, config.LEVERAGE):
+            logger.error(f"❌ {sym}: fallo crítico en setup_symbol — símbolo excluido de esta sesión.")
+            print(f"⚠️ {sym}: Excluido de la flota activa por fallo de configuración de margen/apalancamiento.")
+            continue
         bots[sym] = _build_bot(sym, api, initial_balance)
         cb = make_callback(sym, bots, api)
         bots[sym]["tr"].set_on_close_callback(cb)
@@ -191,7 +194,10 @@ def main():
             current_balance = api.get_balance()
             for sym in pares_activos:
                 if sym not in bots:
-                    api.setup_symbol(sym, config.LEVERAGE)
+                    if not api.setup_symbol(sym, config.LEVERAGE):
+                        logger.error(f"❌ {sym}: fallo en setup_symbol durante hot-reload — símbolo excluido.")
+                        print(f"⚠️ {sym}: Excluido de la flota por error en configuración de margen/apalancamiento.")
+                        continue
                     bots[sym] = _build_bot(sym, api, current_balance)
                 else:
                     memoria = bots[sym]["tr"].active_trades
@@ -350,6 +356,13 @@ def main():
                     btc_features=global_btc_features if sym != "BTCUSDT" else None,
                 )
 
+                b["last_consensus"] = {
+                    "method": method_name.upper() if method_name else "NEUTRAL",
+                    "confidence": round(float(confidence) * 100, 1),
+                    "action": "LONG" if action_code == 1 else ("SHORT" if action_code == 0 else "NEUTRAL"),
+                    "timestamp": datetime.now().strftime('%H:%M:%S')
+                }
+
                 # ── Scale-In Inteligente (DCA) ─────────────────────────────────
                 if 0 < len(active_trades_snapshot) < config.MAX_BULLETS:
                     t_ref = active_trades_snapshot[0]
@@ -447,6 +460,7 @@ def main():
                                     tp,
                                     last_row,
                                     use_sl,
+                                    method=method_name.upper() if method_name else "CONSENSO IA",
                                 )
                             else:
                                 api.release_margin(margin_needed)
@@ -529,6 +543,7 @@ def main():
                     "pair": sym,
                     "current_price": round(curr_price, 6),
                     "type": last_t["action"],
+                    "method": last_t.get("method", "Consenso IA"),
                     "entry": round(avg_entry, 6),
                     "tp": round(last_t.get("tp"), 6) if last_t.get("tp") else 0,
                     "sl": round(last_t.get("sl"), 6) if last_t.get("sl") else 0,
@@ -540,11 +555,17 @@ def main():
                     "bullets": len(active_trades_snapshot)
                 })
 
+            live_consensus = {
+                sym: bots[sym].get("last_consensus", {"method": "NEUTRAL", "confidence": 0, "action": "NEUTRAL"})
+                for sym in pares_activos if sym in bots
+            }
+
             estado = {
                 "pnl_total": round(float(web_pnl_global), 2),
                 "win_rate": round(float(wr_global), 1),
                 "total_operaciones": int(web_trades_global),
                 "operaciones_activas": web_operaciones_activas_safe,
+                "live_consensus": live_consensus,
                 "balance_actual": round(account_balance, 2),
                 "balance_inicial": round(initial_balance, 2),
                 "balance_real": round(real_balance, 2),

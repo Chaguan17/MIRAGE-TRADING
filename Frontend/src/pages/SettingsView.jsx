@@ -502,7 +502,7 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
           style={S.input}
         >
           {param.options?.map((opt) => (
-            <option key={opt} value={opt}>
+            <option key={opt} value={opt} style={{ background: "#0b1120", color: "#f8fafc" }}>
               {opt}
             </option>
           ))}

@@ -114,10 +114,11 @@ class TradeTracker:
                 logger.error(f"Error loading active trades for {self.symbol}: {e}")
                 self.active_trades = []
 
-    def register_trade(self, action, entry_price, size, sl, tp, features, use_sl):
+    def register_trade(self, action, entry_price, size, sl, tp, features, use_sl, method="Consenso IA"):
         trade = {
             'timestamp':   datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'action':      action,
+            'method':      method,
             'entry_price': entry_price,
             'size':        size,
             'sl':          sl if use_sl else None,
@@ -137,44 +138,37 @@ class TradeTracker:
             trades_copy = list(self.active_trades)
 
         for trade in trades_copy:
-            close_price = result = sl_was_hit = None
+            close_price = None
+            sl_was_hit = False
 
             if trade['action'] == 'LONG':
                 if current_price >= trade['tp']:
-                    close_price, result, sl_was_hit = trade['tp'], 'WIN', False
+                    close_price = trade['tp']
+                    sl_was_hit = False
                 elif trade['use_sl'] and trade['sl'] is not None and current_price <= trade['sl']:
-                    close_price, result, sl_was_hit = trade['sl'], 'LOSS', True
+                    close_price = trade['sl']
+                    sl_was_hit = True
 
             else:  # SHORT
                 if current_price <= trade['tp']:
-                    close_price, result, sl_was_hit = trade['tp'], 'WIN', False
+                    close_price = trade['tp']
+                    sl_was_hit = False
                 elif trade['use_sl'] and trade['sl'] is not None and current_price >= trade['sl']:
-                    close_price, result, sl_was_hit = trade['sl'], 'LOSS', True
+                    close_price = trade['sl']
+                    sl_was_hit = True
 
-            if result is None:
+            if close_price is None:
                 continue
 
-            # ── FIX: PnL calculado con el precio de cierre REAL ──────────────
-            # Antes el PnL usaba close_price pero el resultado (WIN/LOSS)
-            # podía ser incoherente si el SL estaba mal calculado.
-            # Ahora validamos que el PnL sea coherente con el resultado.
+            # ── PnL calculado con el precio de cierre REAL ──────────────
             if trade['action'] == 'LONG':
                 pnl = (close_price - trade['entry_price']) * trade['size']
             else:
                 pnl = (trade['entry_price'] - close_price) * trade['size']
 
-            # Guardia de coherencia: LOSS no puede tener PnL positivo significativo
-            # (puede ser marginalmente positivo por floating point, pero nunca real)
-            if result == 'LOSS' and pnl > 0.001:
-                logger.warning(
-                    f"⚠️  Incoherencia PnL detectada en {self.symbol}: "
-                    f"resultado=LOSS pero pnl={pnl:.4f} "
-                    f"(entry={trade['entry_price']}, close={close_price}, "
-                    f"action={trade['action']}). "
-                    f"SL posiblemente calculado del lado equivocado."
-                )
-                # Forzamos PnL negativo mínimo para mantener integridad estadística
-                pnl = -abs(pnl)
+            # Si el Trailing Stop o Breakeven cerró la operación por encima (en LONG)
+            # o por debajo (en SHORT) del precio de entrada, el PnL es positivo y cuenta como WIN.
+            result = 'WIN' if pnl >= 0 else 'LOSS'
 
             self._save_to_db(trade, close_price, result, pnl, sl_was_hit)
             self._update_live_stats(result, pnl)

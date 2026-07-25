@@ -1,14 +1,16 @@
 import React from "react";
 import { STYLES } from "./styles";
 
-export default function ActiveTradesTable({ operaciones_activas, livePrices }) {
+export default function ActiveTradesTable({ operaciones_activas, livePrices, leverage }) {
   const formatPrice = (price) => {
     if (price === undefined || price === null) return "—";
     const num = parseFloat(price);
     if (isNaN(num)) return price;
     if (num === 0) return "0";
-    if (num >= 1) return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+    if (num < 1) return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+    if (num < 10) return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+    if (num < 100) return num.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 4 });
+    return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   return (
@@ -67,7 +69,8 @@ export default function ActiveTradesTable({ operaciones_activas, livePrices }) {
                   (
                     (live / op.entry - 1) *
                     (op.type === "LONG" ? 1 : -1) *
-                    100
+                    100 *
+                    (leverage || 10)
                   ).toFixed(2),
                 );
 

@@ -318,6 +318,21 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	MARTINGALE_MULTIPLIER: float | None = None
 	MARTINGALE_MAX_STEPS: int | None = None
 	MIN_SIZE_USDT: float | None = Field(None, ge=0)
+	# Parámetros adicionales
+	TRAILING_ATR_MULTIPLIER: float | None = Field(None, ge=0)
+	VETO_CRASH_PCT: float | None = Field(None, ge=0, le=100)
+	GLOBAL_RSI_OB_BASE: float | None = Field(None, ge=0)
+	GLOBAL_RSI_OS_BASE: float | None = Field(None, ge=0)
+	# Estrategias Habilitadas
+	STRATEGY_TREND: bool | None = None
+	STRATEGY_REVERSION: bool | None = None
+	STRATEGY_BREAKOUT: bool | None = None
+	STRATEGY_SMC: bool | None = None
+	STRATEGY_VWAP: bool | None = None
+	STRATEGY_LIQUIDITY: bool | None = None
+	STRATEGY_ORDERFLOW: bool | None = None
+	STRATEGY_WYCKOFF: bool | None = None
+	STRATEGY_BTC_CORR: bool | None = None
 
 @app.post("/api/config") # Modificado: Usa el modelo ConfigUpdate para validación
 def update_config(new_settings: ConfigUpdate, _ = Depends(verify_auth)): 
@@ -337,9 +352,10 @@ def update_config(new_settings: ConfigUpdate, _ = Depends(verify_auth)):
 		"TRAILING_STOP_DISTANCE",
 		"BREAKEVEN_ACTIVATION",
 		"ADAPTIVE_RISK_FLOOR",
-    	"ADAPTIVE_RISK_CEIL",
-    	"ADAPTIVE_DRAWDOWN_FLOOR",
-    	"ADAPTIVE_GROWTH_CEIL",
+		"ADAPTIVE_RISK_CEIL",
+		"ADAPTIVE_DRAWDOWN_FLOOR",
+		"ADAPTIVE_GROWTH_CEIL",
+		"VETO_CRASH_PCT",
 	]
 	
 	for field in percentage_fields:

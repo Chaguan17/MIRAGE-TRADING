@@ -22,7 +22,7 @@ function getPrecision(price) {
   return { precision: 2, minMove: 0.01 };
 }
 
-export default function TradingChart({ operaciones_activas, availablePairs }) {
+export default function TradingChart({ operaciones_activas, availablePairs, config, liveConsensus }) {
   const [chartWsUrl, setChartWsUrl] = useState(FUTURES_WS);
   const chartContainerRef = useRef(null);
   const chartRef = useRef(null);
@@ -31,6 +31,7 @@ export default function TradingChart({ operaciones_activas, availablePairs }) {
   const priceLineRefs = useRef([]);
   const wsRef = useRef(null);
   const lastBarRef = useRef(null);
+  const candleDataRef = useRef([]);
 
   const [selectedPair, setSelectedPair] = useState(availablePairs[0] || 'BTCUSDT');
   const [selectedTF, setSelectedTF] = useState('5m');
@@ -159,6 +160,7 @@ export default function TradingChart({ operaciones_activas, availablePairs }) {
         });
 
         candleSeriesRef.current.setData(data);
+        candleDataRef.current = data;
 
         const volData = data.map(d => ({
           time: d.time,
@@ -244,7 +246,7 @@ export default function TradingChart({ operaciones_activas, availablePairs }) {
     };
   }, [selectedPair, selectedTF, chartWsUrl]);
 
-  // ── Price Lines for active trades ──
+  // ── Price Lines for active trades & SMC Order Blocks ──
   useEffect(() => {
     if (!candleSeriesRef.current) return;
     const series = candleSeriesRef.current;
@@ -255,6 +257,34 @@ export default function TradingChart({ operaciones_activas, availablePairs }) {
     });
     priceLineRefs.current = [];
 
+    // ── 1. Dibujar SMC Order Blocks (Bloques de Órdenes: Oferta y Demanda) ──
+    if (candleDataRef.current && candleDataRef.current.length >= 20) {
+      const last20 = candleDataRef.current.slice(-20);
+      const smcSupplyPrice = Math.max(...last20.map(c => c.high));
+      const smcDemandPrice = Math.min(...last20.map(c => c.low));
+
+      const supplyLine = series.createPriceLine({
+        price: smcSupplyPrice,
+        color: '#aa3bff',
+        lineWidth: 1,
+        lineStyle: 3, // Dotted
+        axisLabelVisible: true,
+        title: '🧱 SMC Supply OB (Resistencia)',
+      });
+      priceLineRefs.current.push(supplyLine);
+
+      const demandLine = series.createPriceLine({
+        price: smcDemandPrice,
+        color: '#00f0ff',
+        lineWidth: 1,
+        lineStyle: 3, // Dotted
+        axisLabelVisible: true,
+        title: '⚡ SMC Demand OB (Soporte)',
+      });
+      priceLineRefs.current.push(demandLine);
+    }
+
+    // ── 2. Dibujar Líneas de Posición Activa (Entry, TP, SL) ──
     const activeForPair = (operaciones_activas || []).filter(op => op.pair === selectedPair);
 
     activeForPair.forEach(op => {
@@ -285,16 +315,35 @@ export default function TradingChart({ operaciones_activas, availablePairs }) {
       if (op.sl && op.sl > 0) {
         const slLine = series.createPriceLine({
           price: op.sl,
-          color: '#ff3b69',
+          color: op.is_trailing ? '#f59e0b' : '#ff3b69',
           lineWidth: 1,
           lineStyle: 2,
           axisLabelVisible: true,
-          title: '✕ SL',
+          title: op.is_trailing ? '⚡ TRAILING SL' : '✕ SL',
         });
         priceLineRefs.current.push(slLine);
       }
     });
-  }, [operaciones_activas, selectedPair]);
+
+    // ── 3. Marcadores de Entrada sobre Velas ──
+    const activeOp = activeForPair[0];
+    if (activeOp && candleDataRef.current && candleDataRef.current.length > 0) {
+      const lastBar = candleDataRef.current[candleDataRef.current.length - 1];
+      try {
+        series.setMarkers([
+          {
+            time: lastBar.time,
+            position: activeOp.type === 'LONG' ? 'belowBar' : 'aboveBar',
+            color: activeOp.type === 'LONG' ? '#00ffaa' : '#ff3b69',
+            shape: activeOp.type === 'LONG' ? 'arrowUp' : 'arrowDown',
+            text: `ENTRADA ${activeOp.type} | SMC / Consenso`,
+          }
+        ]);
+      } catch (_) {}
+    } else {
+      try { series.setMarkers([]); } catch (_) {}
+    }
+  }, [operaciones_activas, selectedPair, loading]);
 
   const activeOp = (operaciones_activas || []).find(op => op.pair === selectedPair);
   const isPositive = priceChange >= 0;
@@ -309,7 +358,11 @@ export default function TradingChart({ operaciones_activas, availablePairs }) {
             onChange={e => setSelectedPair(e.target.value)}
             style={pairSelectStyle}
           >
-            {availablePairs.map(p => <option key={p} value={p}>{p}</option>)}
+            {availablePairs.map(p => (
+              <option key={p} value={p} style={optionItemStyle}>
+                {p}
+              </option>
+            ))}
           </select>
 
           {lastPrice !== null && (
@@ -369,6 +422,46 @@ export default function TradingChart({ operaciones_activas, availablePairs }) {
         </div>
       </div>
 
+      {/* ── Banner de Estrategia Evaluadora en Tiempo Real ── */}
+      {(() => {
+        const pairConsensus = (liveConsensus || {})[selectedPair] || { method: "NEUTRAL", confidence: 0, action: "NEUTRAL" };
+        return (
+          <div style={liveStrategyBannerStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: '800', color: '#aa3bff', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                🎯 ESTRATEGIA EN TIEMPO REAL:
+              </span>
+              {activeOp ? (
+                <div style={liveTagStyle('#00ffaa')}>
+                  <span>⚡ Entrada impulsada por:</span>
+                  <strong style={{ color: '#00ffaa' }}>{activeOp.method || 'SMC STRUCTURE'}</strong>
+                </div>
+              ) : pairConsensus.method !== "NEUTRAL" ? (
+                <div style={liveTagStyle(pairConsensus.action === 'LONG' ? '#00ffaa' : '#ff3b69')}>
+                  <span>⚡ Evaluador Dominante:</span>
+                  <strong style={{ color: '#aa3bff' }}>{pairConsensus.method}</strong>
+                  <span style={{ color: '#f8fafc', opacity: 0.85 }}>({pairConsensus.confidence}% Confianza IA)</span>
+                  <span style={{
+                    fontSize: '0.65rem',
+                    fontWeight: '900',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    background: pairConsensus.action === 'LONG' ? 'rgba(0, 255, 170, 0.2)' : 'rgba(255, 59, 105, 0.2)',
+                    color: pairConsensus.action === 'LONG' ? '#00ffaa' : '#ff3b69'
+                  }}>
+                    SEÑAL {pairConsensus.action}
+                  </span>
+                </div>
+              ) : (
+                <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: '600' }}>
+                  🔍 Monitoreando {selectedPair}... Sin señal activa (Esperando confirmación técnica)
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Chart ── */}
       <div style={{ position: 'relative' }}>
         {loading && (
@@ -383,29 +476,37 @@ export default function TradingChart({ operaciones_activas, availablePairs }) {
       </div>
 
       {/* ── Footer with legend ── */}
-      {activeOp && (
-        <div style={footerStyle}>
-          <div style={legendItemStyle('#3b82f6')}>
-            <span style={legendDotStyle('#3b82f6')} /> Entrada: {activeOp.entry}
-          </div>
-          <div style={legendItemStyle('#00ffaa')}>
-            <span style={legendDotStyle('#00ffaa')} /> TP: {activeOp.tp || '—'}
-          </div>
-          <div style={legendItemStyle('#ff3b69')}>
-            <span style={legendDotStyle('#ff3b69')} /> SL: {activeOp.sl || '—'}
-          </div>
-          {activeOp.is_trailing && (
-            <div style={legendItemStyle('#f59e0b')}>
-              <span style={legendDotStyle('#f59e0b')} /> Trailing Activo
-            </div>
-          )}
-          {activeOp.is_breakeven && (
-            <div style={legendItemStyle('#06b6d4')}>
-              <span style={legendDotStyle('#06b6d4')} /> Breakeven
-            </div>
-          )}
+      <div style={footerStyle}>
+        <div style={legendItemStyle('#aa3bff')}>
+          <span style={legendDotStyle('#aa3bff')} /> 🧱 SMC Supply OB
         </div>
-      )}
+        <div style={legendItemStyle('#00f0ff')}>
+          <span style={legendDotStyle('#00f0ff')} /> ⚡ SMC Demand OB
+        </div>
+        {activeOp && (
+          <>
+            <div style={legendItemStyle('#3b82f6')}>
+              <span style={legendDotStyle('#3b82f6')} /> Entrada: {activeOp.entry}
+            </div>
+            <div style={legendItemStyle('#00ffaa')}>
+              <span style={legendDotStyle('#00ffaa')} /> TP: {activeOp.tp || '—'}
+            </div>
+            <div style={legendItemStyle('#ff3b69')}>
+              <span style={legendDotStyle('#ff3b69')} /> SL: {activeOp.sl || '—'}
+            </div>
+            {activeOp.is_trailing && (
+              <div style={legendItemStyle('#f59e0b')}>
+                <span style={legendDotStyle('#f59e0b')} /> Trailing Activo
+              </div>
+            )}
+            {activeOp.is_breakeven && (
+              <div style={legendItemStyle('#06b6d4')}>
+                <span style={legendDotStyle('#06b6d4')} /> Breakeven
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -450,9 +551,9 @@ const priceDisplayStyle = {
 };
 
 const pairSelectStyle = {
-  background: 'rgba(170, 59, 255, 0.08)',
+  background: '#0b1120',
   color: '#f8fafc',
-  border: '1px solid rgba(170, 59, 255, 0.2)',
+  border: '1px solid rgba(170, 59, 255, 0.3)',
   padding: '8px 16px',
   borderRadius: '10px',
   outline: 'none',
@@ -461,6 +562,12 @@ const pairSelectStyle = {
   fontFamily: 'JetBrains Mono, monospace',
   cursor: 'pointer',
   letterSpacing: '0.5px',
+};
+
+const optionItemStyle = {
+  background: '#0b1120',
+  color: '#f8fafc',
+  padding: '8px 12px',
 };
 
 const tfBarStyle = {
@@ -538,4 +645,25 @@ const legendDotStyle = (color) => ({
   borderRadius: '2px',
   background: color,
   boxShadow: `0 0 6px ${color}`,
+});
+
+const liveStrategyBannerStyle = {
+  background: 'rgba(11, 17, 32, 0.7)',
+  border: '1px solid rgba(170, 59, 255, 0.2)',
+  borderRadius: '10px',
+  padding: '8px 14px',
+  marginBottom: '12px',
+};
+
+const liveTagStyle = (borderColor) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '8px',
+  fontSize: '0.75rem',
+  fontWeight: '600',
+  color: '#f8fafc',
+  background: 'rgba(18, 27, 46, 0.8)',
+  border: `1px solid ${borderColor || 'rgba(170, 59, 255, 0.3)'}`,
+  padding: '4px 10px',
+  borderRadius: '8px',
 });

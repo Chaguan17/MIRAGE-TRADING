@@ -122,3 +122,87 @@ def test_veto_engine_local_rsi():
     local_row_neutral = {'RSI': 50.0, 'ATR_pct': 0.5}
     veto_res = veto.check_market_vetoes(tech_action=1, btc_action=None, btc_row=btc_row, local_row=local_row_neutral)
     assert veto_res is None
+
+
+def test_update_config_strategies():
+    """Verifica que el endpoint /api/config acepte y guarde las estrategias y campos adicionales."""
+    from api import update_config, ConfigUpdate
+    import json
+    import os
+    import config as cfg
+    
+    # Hacer copia de settings actual para restaurarla después
+    original_settings = {}
+    if os.path.exists(cfg.SETTINGS_PATH):
+        with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
+            original_settings = json.load(f)
+            
+    try:
+        # 1. Crear payload con estrategias desactivadas
+        payload = ConfigUpdate(
+            STRATEGY_TREND=False,
+            STRATEGY_SMC=False,
+            VETO_CRASH_PCT=10.0,  # 10%
+        )
+        
+        # 2. Llamar a update_config directamente
+        res = update_config(payload)
+        assert res["status"] == "success"
+        
+        # 3. Leer settings.json guardado y verificar cambios
+        with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
+            updated = json.load(f)
+            
+        assert updated["STRATEGY_TREND"] is False
+        assert updated["STRATEGY_SMC"] is False
+        assert updated["VETO_CRASH_PCT"] == 0.1
+        
+    finally:
+        # Restaurar configuración original
+        if original_settings:
+            with open(cfg.SETTINGS_PATH, "w", encoding="utf-8") as f:
+                json.dump(original_settings, f, indent=4)
+
+
+def test_trailing_stop_profit_is_win():
+    """Verifica que un Trailing Stop / Breakeven activado con ganancia sea registrado como WIN y PnL positivo."""
+    from tracker import TradeTracker
+    import sqlite3
+    import os
+    
+    tracker = TradeTracker(symbol="TESTUSDT")
+    # Limpiar trades anteriores de TESTUSDT si los hay
+    conn = sqlite3.connect(tracker.db_path, timeout=15.0)
+    conn.execute("DELETE FROM trades WHERE pair = 'TESTUSDT'")
+    conn.commit()
+    conn.close()
+    
+    # Registrar un trade LONG a 1.15 con SL trailing activado en 1.16
+    tracker.register_trade(
+        action="LONG",
+        entry_price=1.15,
+        size=100.0,
+        sl=1.16,  # Trailing stop por encima de la entrada
+        tp=1.20,
+        features={},
+        use_sl=True
+    )
+    
+    # Simular que el precio actual baja a 1.16 (toca el Trailing Stop)
+    tracker.update_market_price(1.16)
+    
+    # El trade debe haber sido retirado de active_trades
+    assert len(tracker.active_trades) == 0
+    
+    # Consultar DB de SQLite para verificar el resultado del trade
+    conn = sqlite3.connect(tracker.db_path, timeout=15.0)
+    c = conn.cursor()
+    c.execute("SELECT result, pnl_usdt, close_price FROM trades WHERE pair = 'TESTUSDT' ORDER BY rowid DESC LIMIT 1")
+    row = c.fetchone()
+    conn.close()
+    
+    assert row is not None
+    res, pnl, close_p = row
+    assert close_p == 1.16
+    assert res == 'WIN'
+    assert pnl > 0  # (1.16 - 1.15) * 100 = 1.0 USDT

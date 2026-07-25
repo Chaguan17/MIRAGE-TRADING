@@ -14,8 +14,10 @@ export default function HistoryTable({
     const num = parseFloat(price);
     if (isNaN(num)) return price;
     if (num === 0) return "0";
-    if (num >= 1) return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+    if (num < 1) return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+    if (num < 10) return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+    if (num < 100) return num.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 4 });
+    return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   return (
@@ -28,9 +30,9 @@ export default function HistoryTable({
             value={historyFilter}
             onChange={(e) => setHistoryFilter(e.target.value)}
           >
-            <option value="ALL">Todos los Pares</option>
+            <option value="ALL" style={{ background: "#0b1120", color: "#f8fafc" }}>Todos los Pares</option>
             {availablePairs.map((pair) => (
-              <option key={pair} value={pair}>
+              <option key={pair} value={pair} style={{ background: "#0b1120", color: "#f8fafc" }}>
                 {pair.replace("USDT", "/USDT")}
               </option>
             ))}
@@ -40,9 +42,9 @@ export default function HistoryTable({
             value={historyLimit}
             onChange={(e) => setHistoryLimit(Number(e.target.value))}
           >
-            <option value={20}>Últimos 20</option>
-            <option value={50}>Últimos 50</option>
-            <option value={100}>Últimos 100</option>
+            <option value={20} style={{ background: "#0b1120", color: "#f8fafc" }}>Últimos 20</option>
+            <option value={50} style={{ background: "#0b1120", color: "#f8fafc" }}>Últimos 50</option>
+            <option value={100} style={{ background: "#0b1120", color: "#f8fafc" }}>Últimos 100</option>
           </select>
         </div>
       </div>

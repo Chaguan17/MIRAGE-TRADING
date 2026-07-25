@@ -16,14 +16,17 @@ class DataEngine:
         now = time.time()
         if self._fng_cache is None or (now - self._fng_last_fetch) > 3600 * 12:
             try:
-                r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
+                r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=2)
                 data = r.json()
                 val = int(data['data'][0]['value'])
                 self._fng_cache = val
                 self._fng_last_fetch = now
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Error consultando Fear & Greed API: {e}")
                 if self._fng_cache is None:
                     self._fng_cache = 50
+                # Evitar reintentos inmediatos en cada ciclo de 2s si la API falla o da timeout
+                self._fng_last_fetch = now - (3600 * 11)  # Reintentar dentro de 1h
         return self._fng_cache
 
     def prepare_features(self, df, df_1h=None, df_4h=None):

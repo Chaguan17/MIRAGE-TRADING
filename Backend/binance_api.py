@@ -116,20 +116,27 @@ class MirageBinance:
             
         try:
             # CCXT maneja la conversión si se requiere
+            margin_ok = True
             try:
                 self.client.set_margin_mode('isolated', symbol)
                 logger.info(f"✅ {symbol}: Margen cambiado a ISOLATED")
             except Exception as e:
-                if "No need to change" not in str(e):
-                    logger.warning(f"⚠️ {symbol}: Error al cambiar margin_type: {e}")
+                err_str = str(e)
+                if "No need to change" in err_str or "MARGIN_TYPE_UNCHANGED" in err_str:
+                    logger.info(f"ℹ️ {symbol}: Modo de margen ya es ISOLATED")
+                else:
+                    logger.error(f"❌ {symbol}: Error al cambiar margin_type a ISOLATED: {e}")
+                    print(f"⚠️ {symbol}: Error al cambiar modo de margen a ISOLATED: {e}")
+                    margin_ok = False
                     
             try:
                 self.client.set_leverage(leverage, symbol)
                 logger.info(f"✅ {symbol}: Apalancamiento ajustado a {leverage}x")
             except Exception as e:
-                logger.warning(f"⚠️ {symbol}: Error al ajustar leverage: {e}")
+                logger.error(f"❌ {symbol}: Error al ajustar leverage: {e}")
+                return False
                 
-            return True
+            return margin_ok
         except Exception as e:
             logger.error(f"❌ Error en setup_symbol para {symbol}: {e}")
             return False
@@ -148,7 +155,7 @@ class MirageBinance:
             return self._paper_balance
         try:
             balance = self.client.fetch_balance()
-            return float(balance.get('USDT', {}).get('free', 0))
+            return float(balance.get('USDT', {}).get('total', 0))
         except Exception as e:
             logger.warning(f"Error obteniendo balance: {e}")
             print(f"⚠️ Error obteniendo balance: {e}")

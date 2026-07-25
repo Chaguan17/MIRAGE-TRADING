@@ -105,12 +105,15 @@ export default function DashboardView({
         <TradingChart 
           operaciones_activas={data.operaciones_activas}
           availablePairs={availablePairs}
+          config={data?.config}
+          liveConsensus={data?.live_consensus}
         />
       )}
       
       <ActiveTradesTable 
         operaciones_activas={data.operaciones_activas} 
         livePrices={livePrices} 
+        leverage={data.config?.LEVERAGE || 10}
       />
       
       <HistoryTable 

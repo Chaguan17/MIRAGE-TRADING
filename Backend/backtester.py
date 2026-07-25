@@ -132,6 +132,9 @@ class SimpleBacktester:
             fees = (entry * t['size'] + exit_real * t['size']) * self.fee_rate
 
             pnl = gross_pnl - fees
+            if res != 'LIQUIDATED':
+                res = 'WIN' if pnl >= 0 else 'LOSS'
+
             self.balance += pnl
             self.history.append({'pnl': pnl, 'res': res, 'method': t['method']})
             
