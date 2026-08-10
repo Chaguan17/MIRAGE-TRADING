@@ -18,6 +18,7 @@ from market_stream import stream_manager
 import data_engine as data_engine
 import risk_manager as risk_manager
 import tracker as tracker
+import notification_manager as nm
 from datetime import datetime, time as dtime
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,9 @@ def _build_bot(sym, api, initial_balance):
 def main():
     print("🤖 MIRAGE TRADING — Flota Multi-Par con Riesgo Adaptativo")
 
-    api = MirageBinance(config.API_KEY, config.API_SECRET, paper_trading=True)
+    dyn_init = config.load_dynamic_settings()
+    paper_mode = bool(dyn_init.get("PAPER_TRADING", True))
+    api = MirageBinance(config.API_KEY, config.API_SECRET, paper_trading=paper_mode)
     if not connect_with_retry(api):
         return
 
@@ -234,6 +237,9 @@ def main():
 
             print("✅ Flota actualizada.\n")
 
+        dyn_now = config.load_dynamic_settings()
+        api.paper_trading = bool(dyn_now.get("PAPER_TRADING", True))
+
         account_balance = api.get_balance()
         if account_balance > 0:
             last_known_balance = account_balance
@@ -242,27 +248,71 @@ def main():
             
         available_margin = api.get_available_margin()
 
-        # ── COMANDOS BIDIRECCIONALES (PANIC BUTTON) ───────────────────────────
+        # ── COMANDOS BIDIRECCIONALES (PANIC BUTTON Y CIERRES MANUALES) ──────
         command_file = os.path.join(config.STORAGE_DIR, "commands.json")
         if os.path.exists(command_file):
             try:
                 with open(command_file, "r", encoding="utf-8") as f:
                     cmd_data = json.load(f)
-                if cmd_data.get("action") == "PANIC_SELL":
+                action = cmd_data.get("action")
+                target_sym = cmd_data.get("symbol")
+
+                if action == "PANIC_SELL":
                     print("\n🚨🚨 PANIC BUTTON ACTIVADO 🚨🚨 Cerrando todas las operaciones...")
                     for sym in pares_activos:
                         b = bots[sym]
                         if len(b["tr"].active_trades) > 0:
-                            # Conseguir el precio actual
                             live_1m = stream_manager.get_data(sym, "1m")
-                            if live_1m is not None and not live_1m.empty:
-                                close_p = live_1m.iloc[-1]['close']
-                            else:
-                                close_p = b["tr"].active_trades[0]['entry_price']
+                            close_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else b["tr"].active_trades[0]['entry_price']
                             b["tr"].force_close(close_p, api)
+                elif action == "CLOSE_POSITION" and target_sym:
+                    print(f"\n🚨 Cierre manual solicitado desde Dashboard para {target_sym}...")
+                    if target_sym in bots:
+                        b = bots[target_sym]
+                        live_1m = stream_manager.get_data(target_sym, "1m")
+                        close_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else (b["tr"].active_trades[0]['entry_price'] if b["tr"].active_trades else 0)
+                        b["tr"].force_close(close_p, api)
+
                 os.remove(command_file)
             except Exception as e:
                 logger.error(f"Error procesando command_file: {e}")
+
+        # ── SINCRONIZACIÓN AUTOMÁTICA DE POSICIONES REALES EN BINANCE ─────────
+        if not api.paper_trading:
+            try:
+                real_positions = api.get_open_positions(pares_activos)
+                for sym in pares_activos:
+                    b = bots[sym]
+                    with b["tr"]._trades_lock:
+                        active_in_mem = list(b["tr"].active_trades)
+                    real_pos = real_positions.get(sym)
+
+                    # Si el bot tiene trades activos en memoria pero en Binance la posición YA NO EXISTE
+                    # (ej: se cerró en el exchange por Stop Loss, Take Profit o cierre manual)
+                    if active_in_mem and not real_pos:
+                        logger.info(f"🔄 Reconciliación Real: {sym} ya fue cerrada en Binance. Limpiando memoria...")
+                        last_p = b.get("last_price")
+                        if not last_p:
+                            live_1m = stream_manager.get_data(sym, "1m")
+                            last_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else active_in_mem[0].get('entry_price', 0)
+
+                        for t in active_in_mem:
+                            pnl = (last_p - t['entry_price']) * t['size'] if t['action'] == 'LONG' else (t['entry_price'] - last_p) * t['size']
+                            res = "WIN" if pnl >= 0 else "LOSS"
+                            b["tr"]._save_to_db(t, last_p, res, pnl, sl_was_hit=None)
+                            with b["tr"]._trades_lock:
+                                if t in b["tr"].active_trades:
+                                    b["tr"].active_trades.remove(t)
+                        b["tr"]._save_active_trades_to_file()
+                        nm.add_notification(
+                            "INFO",
+                            f"Posición Sincronizada ({sym})",
+                            f"Se detectó que la posición fue cerrada en Binance (TP/SL o manual). Memoria liberada.",
+                            sym
+                        )
+            except Exception as sync_err:
+                logger.error(f"Error durante sincronización de posiciones con Binance: {sync_err}")
+
 
         # ── SOLUCIÓN PUNTO 3: Obtención anticipada del contexto global de BTC ──
         global_btc_features = None
@@ -468,6 +518,12 @@ def main():
                             logger.warning(
                                 f"⚠️ Margen insuficiente para {sym}. Requerido: {margin_needed:.2f}"
                             )
+                            nm.add_notification(
+                                "WARNING",
+                                f"Margen insuficiente ({sym})",
+                                f"Margen requerido: ${margin_needed:.2f} USDT | Disponible: ${available_margin:.2f} USDT",
+                                sym
+                            )
                 else:
                     if b["cooldown_left"] > 0:
                         b["cooldown_left"] -= 1
@@ -482,12 +538,15 @@ def main():
         # ── Actualizar dashboard ──────────────────────────────────────────────
         try:
             web_pnl_global = 0
+            web_pnl_diario = 0
             web_trades_global = 0
             web_wins_global = 0
             
             for sym in pares_activos:
                 total, wins, losses, wr, pnl = bots[sym]["tr"].get_dashboard_stats()
+                daily_pnl = bots[sym]["tr"].get_daily_pnl()
                 web_pnl_global += pnl
+                web_pnl_diario += daily_pnl
                 web_trades_global += total
                 web_wins_global += wins
                 
@@ -562,6 +621,7 @@ def main():
 
             estado = {
                 "pnl_total": round(float(web_pnl_global), 2),
+                "pnl_diario": round(float(web_pnl_diario), 2),
                 "win_rate": round(float(wr_global), 1),
                 "total_operaciones": int(web_trades_global),
                 "operaciones_activas": web_operaciones_activas_safe,

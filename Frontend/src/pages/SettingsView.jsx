@@ -292,14 +292,18 @@ const ConfigField = ({ param, paramKey, config, setConfig }) => {
   }, [displayValue]);
 
   const computedStep = useMemo(() => {
-    // ✅ FIX %
+    // ✅ FIX %: Derivar el paso en pantalla según param.step * 100 de las metadatos
     if (isPercentage) {
+      if (param.step !== undefined && param.step !== null) {
+        const stepDisplay = Number(param.step) * 100;
+        return String(Number(stepDisplay.toFixed(4)));
+      }
       return "0.1";
     }
 
     const metaStep = Number(param.step);
 
-    if (param.step !== undefined && param.step !== null && metaStep >= 1) {
+    if (param.step !== undefined && param.step !== null && metaStep > 0) {
       return String(metaStep);
     }
 

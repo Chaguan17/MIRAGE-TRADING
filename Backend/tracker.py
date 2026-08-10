@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class TradeTracker:
     COLUMNAS = [
         'timestamp', 'pair', 'action', 'entry_price', 'close_price',
-        'size', 'result', 'pnl_usdt',
+        'size', 'result', 'pnl_usdt', 'order_id',
         'RSI', 'ATR', 'ATR_pct', 'EMA_diff', 'EMA_diff_norm',
         'MACD', 'MACD_hist', 'BB_width', 'BB_position',
         'volume_ratio', 'trend_signal', 'above_ema200', 'momentum_signal',
@@ -114,7 +114,7 @@ class TradeTracker:
                 logger.error(f"Error loading active trades for {self.symbol}: {e}")
                 self.active_trades = []
 
-    def register_trade(self, action, entry_price, size, sl, tp, features, use_sl, method="Consenso IA"):
+    def register_trade(self, action, entry_price, size, sl, tp, features, use_sl, method="Consenso IA", order_id=None):
         trade = {
             'timestamp':   datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'action':      action,
@@ -124,6 +124,7 @@ class TradeTracker:
             'sl':          sl if use_sl else None,
             'tp':          tp,
             'use_sl':      use_sl,
+            'order_id':    str(order_id) if order_id else None,
             '_features':   features,
             **{col: round(float(features.get(col, 0)), 6) for col in self.FEATURE_COLS},
         }
@@ -131,7 +132,8 @@ class TradeTracker:
             self.active_trades.append(trade)
             self._save_active_trades_to_file()
         sl_str = f"SL={sl:.4f}" if use_sl else "SIN SL"
-        print(f"📝 {action} {self.symbol} @ {entry_price:.4f} | TP={tp:.4f} | {sl_str}")
+        order_str = f" | OrderID={order_id}" if order_id else ""
+        print(f"📝 {action} {self.symbol} @ {entry_price:.4f} | TP={tp:.4f} | {sl_str}{order_str}")
 
     def update_market_price(self, current_price):
         with self._trades_lock:
@@ -231,6 +233,7 @@ class TradeTracker:
             'size':        trade['size'],
             'result':      result,
             'pnl_usdt':    round(pnl, 4),
+            'order_id':    trade.get('order_id'),
             'sl_was_used': int(trade['use_sl']),
             'sl_was_hit':  int(sl_was_hit) if sl_was_hit is not None else 0,
             **{col: trade.get(col, 0) for col in self.FEATURE_COLS},
@@ -257,3 +260,17 @@ class TradeTracker:
 
     def get_dashboard_stats(self):
         return self.total_trades, self.wins, self.losses, self.win_rate, self.total_pnl
+
+    def get_daily_pnl(self):
+        try:
+            today_prefix = datetime.now().strftime('%Y-%m-%d') + '%'
+            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            res = conn.execute(
+                "SELECT SUM(pnl_usdt) FROM trades WHERE pair = ? AND timestamp LIKE ?",
+                (self.symbol, today_prefix)
+            ).fetchone()
+            conn.close()
+            return float(res[0]) if res and res[0] is not None else 0.0
+        except Exception as e:
+            logger.error(f"Error cargando PnL diario de {self.symbol}: {e}")
+            return 0.0

@@ -2,7 +2,7 @@ import React from "react";
 import { STYLES } from "./styles";
 
 export default function PairStatsRow({ pairStats, activePairs }) {
-  if (!pairStats || pairStats.length === 0) return null;
+  if (!Array.isArray(pairStats) || pairStats.length === 0) return null;
 
   return (
     <div style={STYLES.pairStatsRow}>

@@ -1,13 +1,13 @@
 import React from "react";
 import { STYLES } from "./styles";
 
-export default function KPIGrid({ data, liveTotalPnL }) {
+export default function KPIGrid({ data, liveDailyPnL }) {
   const kpis = [
     {
-      label: "Net PnL Global (Live)",
-      value: `${liveTotalPnL >= 0 ? "+" : ""}${liveTotalPnL.toFixed(2)}`,
+      label: "Net PnL Diario (Live)",
+      value: `${liveDailyPnL >= 0 ? "+" : ""}${liveDailyPnL.toFixed(2)}`,
       unit: "USDT",
-      color: liveTotalPnL >= 0 ? "#00ffaa" : "#ff3b69",
+      color: liveDailyPnL >= 0 ? "#00ffaa" : "#ff3b69",
     },
     {
       label: "Balance Cuenta",

@@ -103,16 +103,6 @@ export function useDashboardData() {
     };
 
     binanceWsRef.current = ws;
-
-    // Monitor connection and trigger fallback to Spot if no messages arrive in 6 seconds
-    if (binanceWsUrl === FUTURES_WS_URL) {
-      setTimeout(() => {
-        if (!messageReceived && !unmountedRef.current && ws === binanceWsRef.current) {
-          console.warn("⚠️ Binance Futures WS silent. Switching to Spot WS fallback...");
-          setBinanceWsUrl(SPOT_WS_URL);
-        }
-      }, 6000);
-    }
   }, [binanceWsUrl]);
 
   // ── Init: Connect backend WS + initial REST fallback ──

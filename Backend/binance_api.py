@@ -220,3 +220,28 @@ class MirageBinance:
         logger.error(f"get_historical_data({symbol}) falló tras {self.MAX_RETRIES} intentos")
         print(f"❌ No se pudo obtener datos de {symbol} tras {self.MAX_RETRIES} intentos")
         return None
+
+    def get_open_positions(self, symbols=None):
+        """
+        Devuelve un diccionario { 'XRPUSDT': {'contracts': 41.7, 'side': 'SHORT', ...} }
+        con las posiciones reales abiertas en Binance Futuros.
+        """
+        if self.paper_trading:
+            return {}
+        try:
+            raw_positions = self.client.fetch_positions(symbols)
+            res = {}
+            for p in raw_positions:
+                contracts = float(p.get('contracts', 0) or 0)
+                sym = p.get('symbol', '').replace('/', '')
+                if contracts > 0:
+                    res[sym] = {
+                        'contracts': contracts,
+                        'side': str(p.get('side', '')).upper(),
+                        'entry_price': float(p.get('entryPrice', 0) or 0),
+                        'pnl': float(p.get('unrealizedPnl', 0) or 0),
+                    }
+            return res
+        except Exception as e:
+            logger.error(f"Error fetching open positions from Binance: {e}")
+            return {}

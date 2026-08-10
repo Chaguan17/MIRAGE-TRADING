@@ -1,6 +1,9 @@
+import logging
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
+
+logger = logging.getLogger(__name__)
 
 
 class DataEngine:
@@ -94,9 +97,6 @@ class DataEngine:
         df['funding_rate'] = df['funding_rate'].fillna(0.0)
         df['fear_and_greed'] = self._get_fear_and_greed()
 
-        # ── LIMPIEZA FINAL ──────────────────────────────────────────────────
-        df = df.replace([np.inf, -np.inf], np.nan)
-
         # ── 3. VOLATILIDAD ──────────────────────────────────────────────────
         atr = ta.atr(df['high'], df['low'], df['close'], length=14)
         df['ATR'] = atr if atr is not None else pd.Series(np.nan, index=df.index)
@@ -116,11 +116,16 @@ class DataEngine:
                     self._bb_upper_col, self._bb_lower_col = u, l
                     break
 
-        if self._bb_upper_col:
+        if self._bb_upper_col and self._bb_upper_col in df.columns:
             df['BB_upper']    = df[self._bb_upper_col]
             df['BB_lower']    = df[self._bb_lower_col]
             df['BB_width']    = (df['BB_upper'] - df['BB_lower']) / df['close'] * 100
             df['BB_position'] = (df['close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'] + 1e-9)
+        else:
+            df['BB_upper'] = df['close']
+            df['BB_lower'] = df['close']
+            df['BB_width'] = 0.0
+            df['BB_position'] = 0.5
 
         # ── 4. VOLUMEN ──────────────────────────────────────────────────────
         volume_ma = ta.ema(df['volume'], length=20)
@@ -134,13 +139,13 @@ class DataEngine:
 
         # ── 6. VWAP ─────────────────────────────────────────────────────────
         typical_price  = (df['high'] + df['low'] + df['close']) / 3
-        window = 100
+        window = min(100, len(df))
         cum_tp_vol = (
             typical_price * df['volume']
-        ).rolling(window).sum()
+        ).rolling(window, min_periods=1).sum()
         cum_vol = (
             df['volume']
-        ).rolling(window).sum()
+        ).rolling(window, min_periods=1).sum()
         df['VWAP']     = cum_tp_vol / (cum_vol + 1e-9)
         df['VWAP_dist'] = (df['close'] - df['VWAP']) / (df['VWAP'] + 1e-9) * 100
 
@@ -148,22 +153,26 @@ class DataEngine:
         candle_range      = df['high'] - df['low'] + 1e-9
         close_position    = (df['close'] - df['low']) / candle_range
         df['delta']       = (close_position - 0.5) * 2 * df['volume']
-        df['delta_cum5']  = df['delta'].rolling(5).sum()
-        df['delta_cum10'] = df['delta'].rolling(10).sum()
-        price_change5     = df['close'].diff(5)
+        df['delta_cum5']  = df['delta'].rolling(5, min_periods=1).sum()
+        df['delta_cum10'] = df['delta'].rolling(10, min_periods=1).sum()
+        price_change5     = df['close'].diff(5).fillna(0)
         df['delta_div']   = np.sign(price_change5) * np.sign(df['delta_cum5'])
 
         # ── 8. WYCKOFF ──────────────────────────────────────────────────────
-        df['price_slope'] = df['close'].diff(10) / (df['close'].shift(10) + 1e-9) * 100
-        df['range_pct']   = (df['high'].rolling(20).max() - df['low'].rolling(20).min()) / df['close'] * 100
+        df['price_slope'] = df['close'].diff(10).fillna(0) / (df['close'].shift(10).fillna(df['close']) + 1e-9) * 100
+        df['range_pct']   = (df['high'].rolling(20, min_periods=1).max() - df['low'].rolling(20, min_periods=1).min()) / df['close'] * 100
 
         # ── 9. ESTRUCTURA SMC ────────────────────────────────────────────────
-        df['struct_high']      = df['high'].rolling(20).max()
-        df['struct_low']       = df['low'].rolling(20).min()
+        df['struct_high']      = df['high'].rolling(20, min_periods=1).max()
+        df['struct_low']       = df['low'].rolling(20, min_periods=1).min()
         df['near_struct_high'] = (abs(df['close'] - df['struct_high']) / df['close'] < 0.002).astype(int)
         df['near_struct_low']  = (abs(df['close'] - df['struct_low'])  / df['close'] < 0.002).astype(int)
 
-        return df.dropna()
+        # ── LIMPIEZA FINAL: Preservar la última vela viva en tiempo real ──
+        df = df.replace([np.inf, -np.inf], np.nan)
+        df = df.ffill().bfill().fillna(0.0)
+
+        return df
 
     def get_feature_columns(self):
         return [

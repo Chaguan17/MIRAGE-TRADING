@@ -137,9 +137,12 @@ class RiskManager:
         total_buying_power = account_balance * config.LEVERAGE
         risk_amount = account_balance * self._current_risk
 
+        effective_bullets = 1 if account_balance < 15.0 else config.MAX_BULLETS
+        max_notional_per_bullet = total_buying_power / effective_bullets
+
         if stop_loss_price is None:
             notional = min(
-                total_buying_power * 0.10,
+                total_buying_power * 0.50,
                 account_balance * config.NO_SL_SIZE_PCT
             )
             size = round(notional / entry_price, 6)
@@ -147,10 +150,8 @@ class RiskManager:
             risk_per_coin = abs(entry_price - stop_loss_price)
             if risk_per_coin == 0:
                 return 0
-            size = round((risk_amount / risk_per_coin) / config.MAX_BULLETS, 6)
+            size = round((risk_amount / risk_per_coin) / effective_bullets, 6)
 
-        # Cap de apalancamiento real
-        max_notional_per_bullet = total_buying_power / config.MAX_BULLETS
         current_notional = size * entry_price
         if current_notional > max_notional_per_bullet:
             logger.warning(
@@ -159,9 +160,21 @@ class RiskManager:
             )
             size = round(max_notional_per_bullet / entry_price, 6)
 
-        if config.MIN_SIZE_USDT > 0 and size * entry_price < config.MIN_SIZE_USDT:
-            logger.debug(f"Size {size * entry_price:.2f} USDT < mínimo {config.MIN_SIZE_USDT} → cancelado")
-            return 0
+        current_notional = size * entry_price
+        # Si el notional es menor que el mínimo requerido por Binance (MIN_SIZE_USDT),
+        # pero la cuenta tiene poder de compra suficiente, se ajusta al mínimo exigido.
+        if config.MIN_SIZE_USDT > 0 and current_notional < config.MIN_SIZE_USDT:
+            if total_buying_power >= config.MIN_SIZE_USDT:
+                logger.info(
+                    f"📐 Ajustando notional de {current_notional:.2f} USDT al mínimo de Binance "
+                    f"({config.MIN_SIZE_USDT:.2f} USDT)"
+                )
+                size = round(config.MIN_SIZE_USDT / entry_price, 6)
+            else:
+                logger.warning(
+                    f"⚠️ Poder de compra {total_buying_power:.2f} USDT < mínimo Binance {config.MIN_SIZE_USDT:.2f} USDT"
+                )
+                return 0
 
         return size
 

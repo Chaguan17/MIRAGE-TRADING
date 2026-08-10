@@ -102,6 +102,7 @@ def validate_sleep_config(start_h: int, start_m: int, end_h: int, end_m: int) ->
 # PARÁMETROS OPERATIVOS (cargados desde settings.json)
 # ════════════════════════════════════════════════════════════════════════════
 
+PAPER_TRADING = bool(dyn.get("PAPER_TRADING", True))
 PAPER_BALANCE = float(dyn.get("PAPER_BALANCE", 1000))
 LEVERAGE      = clamp_leverage(dyn.get("LEVERAGE", 5))
 TIMEFRAME     = dyn.get("TIMEFRAME", "15m")
@@ -141,6 +142,7 @@ RISK_REDUCTION_FACTOR  = float(dyn.get("RISK_REDUCTION_FACTOR", 0.5))
 
 NO_SL_SIZE_PCT = float(dyn.get("NO_SL_SIZE_PCT", 0.10))   # % del balance sin SL
 MIN_SIZE_USDT  = float(dyn.get("MIN_SIZE_USDT", 5.0))
+USE_LIMIT_ORDERS = bool(dyn.get("USE_LIMIT_ORDERS", True))   # Órdenes Límite (Maker Fee 0.020%)
 
 # Stops dinámicos
 ATR_MULTIPLIER        = float(dyn.get("ATR_MULTIPLIER", 1.5))

@@ -107,6 +107,7 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
 
     chart.priceScale('volume').applyOptions({
       scaleMargins: { top: 0.85, bottom: 0 },
+      visible: false,
     });
 
     chartRef.current = chart;
@@ -147,6 +148,11 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
         const res = await fetch(`${API_BASE_URL}/api/chart/${selectedPair}?tf=${selectedTF}`);
         if (!res.ok) throw new Error("Error fetching chart data");
         const rawData = await res.json();
+
+        if (!Array.isArray(rawData) || rawData.length === 0) {
+          setLoading(false);
+          return;
+        }
 
         const uniqueMap = new Map();
         rawData.forEach(item => uniqueMap.set(item.time, item));
@@ -220,15 +226,6 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
         };
 
         wsRef.current = ws;
-
-        if (chartWsUrl === FUTURES_WS) {
-          setTimeout(() => {
-            if (!msgReceived && isMounted && ws === wsRef.current) {
-              console.warn("⚠️ Chart Futures WS silent. Switching to Spot WS...");
-              setChartWsUrl(SPOT_WS);
-            }
-          }, 6000);
-        }
       } catch (err) {
         console.error("Chart fetch error:", err);
         if (isMounted) setLoading(false);
@@ -440,7 +437,11 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
                 <div style={liveTagStyle(pairConsensus.action === 'LONG' ? '#00ffaa' : '#ff3b69')}>
                   <span>⚡ Evaluador Dominante:</span>
                   <strong style={{ color: '#aa3bff' }}>{pairConsensus.method}</strong>
-                  <span style={{ color: '#f8fafc', opacity: 0.85 }}>({pairConsensus.confidence}% Confianza IA)</span>
+                  {pairConsensus.confidence > 0 ? (
+                    <span style={{ color: '#f8fafc', opacity: 0.85 }}>({pairConsensus.confidence}% Confianza IA)</span>
+                  ) : (
+                    <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>(Análisis Técnico Activo)</span>
+                  )}
                   <span style={{
                     fontSize: '0.65rem',
                     fontWeight: '900',

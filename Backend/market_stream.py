@@ -7,11 +7,11 @@ import websocket
 
 logger = logging.getLogger(__name__)
 
+
 class MarketStream:
     """
     Gestiona una conexión WebSocket a Binance Futures (fstream.binance.com)
-    para mantener un caché local en memoria de los datos OHLCV sin consumir
-    peticiones de la API REST (Rate Limits).
+    para mantener un caché local en memoria de los datos OHLCV en tiempo real.
     """
     def __init__(self):
         self.symbols = []
@@ -30,18 +30,18 @@ class MarketStream:
         self.ws_thread = None
         self.is_running = False
         self.stop_event = threading.Event()
-        self.use_spot_fallback = False
-        self.message_count = 0
 
     def initialize(self, symbols, timeframes):
-        self.symbols = [s.lower() for s in symbols]
-        self.timeframes = timeframes
+        self.symbols = [str(s).strip().lower() for s in symbols]
+        self.timeframes = list(timeframes)
         
-        for sym in self.symbols:
-            self.cache[sym] = {tf: None for tf in timeframes}
-            self.latest_candle[sym] = {tf: None for tf in timeframes}
-            self.funding_rate[sym] = 0.0
-            self.open_interest[sym] = 0.0
+        with self.lock:
+            for sym in self.symbols:
+                if sym not in self.cache:
+                    self.cache[sym] = {tf: None for tf in self.timeframes}
+                    self.latest_candle[sym] = {tf: None for tf in self.timeframes}
+                    self.funding_rate[sym] = 0.0
+                    self.open_interest[sym] = 0.0
 
     def start(self):
         if not self.symbols:
@@ -55,20 +55,14 @@ class MarketStream:
 
     def _run_ws(self):
         while self.is_running:
-            self.message_count = 0
-            
             streams = []
             for sym in self.symbols:
                 for tf in self.timeframes:
                     streams.append(f"{sym}@kline_{tf}")
-                if not self.use_spot_fallback:
-                    streams.append(f"{sym}@markPrice")
-                else:
-                    streams.append(f"{sym}@miniTicker")
+                streams.append(f"{sym}@markPrice@1s")
             
-            base_url = "wss://stream.binance.com/stream" if self.use_spot_fallback else "wss://fstream.binance.com/stream"
-            url = f"{base_url}?streams={'/'.join(streams)}"
-            logger.info(f"Conectando a Binance Streams ({'Spot Fallback' if self.use_spot_fallback else 'Futures'}): {url}")
+            url = f"wss://fstream.binance.com/stream?streams={'/'.join(streams)}"
+            logger.info(f"⚡ Conectando a Binance Futures WebSocket Stream: {url}")
             
             self.ws = websocket.WebSocketApp(
                 url,
@@ -81,26 +75,13 @@ class MarketStream:
             ws_conn_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
             ws_conn_thread.start()
             
-            # Wait 6 seconds and check if messages arrived (if not on fallback yet)
-            if not self.use_spot_fallback:
-                self.stop_event.wait(timeout=6)
-                if self.is_running and self.message_count == 0:
-                    logger.warning("⚠️ No se recibieron mensajes en Futures WS en 6s. Activando Fallback a Spot WS...")
-                    self.use_spot_fallback = True
-                    try:
-                        self.ws.close()
-                    except Exception:
-                        pass
-                    ws_conn_thread.join(timeout=1.0)
-                    continue # Reconnect using fallback
-            
-            # Wait until closed or stopped
+            # Wait while connection is alive
             while self.is_running and ws_conn_thread.is_alive():
                 self.stop_event.wait(timeout=2)
                 
             if self.is_running:
-                logger.info("Reconectando MarketStream en 5 segundos...")
-                self.stop_event.wait(timeout=5)
+                logger.info("🔄 Reconectando MarketStream de Binance Futuros en 3 segundos...")
+                self.stop_event.wait(timeout=3)
 
     def stop(self):
         self.is_running = False
@@ -114,17 +95,16 @@ class MarketStream:
             self.ws_thread.join(timeout=2.0)
 
     def _on_open(self, ws):
-        logger.info("MarketStream conectado a Binance.")
+        logger.info("✅ MarketStream conectado exitosamente a Binance Futuros (fstream.binance.com).")
 
     def _on_error(self, ws, error):
-        logger.error(f"Error en MarketStream: {error}")
+        logger.error(f"❌ Error en MarketStream: {error}")
 
     def _on_close(self, ws, close_status_code, close_msg):
-        logger.info(f"MarketStream cerrado: {close_status_code} - {close_msg}")
+        logger.info(f"ℹ️ MarketStream cerrado: {close_status_code} - {close_msg}")
 
     def _on_message(self, ws, message):
         try:
-            self.message_count += 1
             data = json.loads(message)
             if 'data' not in data:
                 return
@@ -134,12 +114,12 @@ class MarketStream:
             
             # 1. Kline stream
             if 'kline' in stream_name or 'k' in payload:
-                kline = payload['k']
-                sym = payload['s'].lower()
-                tf = kline['i']
+                kline = payload.get('k', {})
+                sym = payload.get('s', '').lower()
+                tf = kline.get('i', '')
                 
-                with self.lock:
-                    self.latest_candle[sym][tf] = {
+                if sym and tf:
+                    candle_item = {
                         'timestamp': kline['t'],
                         'open': float(kline['o']),
                         'high': float(kline['h']),
@@ -148,29 +128,29 @@ class MarketStream:
                         'volume': float(kline['v']),
                         'is_closed': kline['x']
                     }
+                    with self.lock:
+                        if sym not in self.latest_candle:
+                            self.latest_candle[sym] = {}
+                        self.latest_candle[sym][tf] = candle_item
             
             # 2. Mark Price (Funding Rate)
             elif 'markPrice' in stream_name or 'r' in payload:
-                sym = payload['s'].lower()
-                if 'r' in payload:
+                sym = payload.get('s', '').lower()
+                if sym and 'r' in payload:
                     with self.lock:
                         self.funding_rate[sym] = float(payload['r'])
-                        
-            # 3. Open Interest (if supported)
-            elif 'openInterest' in stream_name:
-                sym = payload.get('s', '').lower()
-                if sym:
-                    pass # Not always reliable in standard stream, we'll keep the placeholder
 
         except Exception as e:
             logger.error(f"Error parseando mensaje WS: {e}")
 
     def set_historical_cache(self, symbol, tf, df):
         """Inicializa el caché con datos REST."""
-        if df is None:
+        if df is None or df.empty:
             return
         sym = symbol.lower()
         with self.lock:
+            if sym not in self.cache:
+                self.cache[sym] = {}
             self.cache[sym][tf] = df.copy()
 
     def get_data(self, symbol, tf):
@@ -214,5 +194,6 @@ class MarketStream:
             df.at[idx, 'funding_rate'] = self.funding_rate.get(sym, 0.0)
                 
             return df
+
 
 stream_manager = MarketStream()

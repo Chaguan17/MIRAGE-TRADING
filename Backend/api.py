@@ -10,6 +10,7 @@ import importlib
 import asyncio
 from contextlib import asynccontextmanager
 import config as cfg
+import notification_manager as nm
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +27,39 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+import math
+
+def sanitize_nan(obj):
+	if isinstance(obj, float):
+		if math.isnan(obj) or math.isinf(obj):
+			return 0.0
+		return obj
+	elif isinstance(obj, dict):
+		return {k: sanitize_nan(v) for k, v in obj.items()}
+	elif isinstance(obj, list):
+		return [sanitize_nan(v) for v in obj]
+	return obj
+
 app = FastAPI(title="Mirage Trading API", lifespan=lifespan)
 
-allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,http://localhost:3000").split(",")
+allowed_origins = [
+	"http://localhost:5173",
+	"http://localhost:5174",
+	"http://localhost:3000",
+	"http://127.0.0.1:5173",
+	"http://127.0.0.1:5174",
+	"http://127.0.0.1:3000",
+]
+if os.getenv("CORS_ORIGINS"):
+	allowed_origins.extend(os.getenv("CORS_ORIGINS").split(","))
+
 app.add_middleware(
 	CORSMiddleware,
 	allow_origins=allowed_origins,
+	allow_origin_regex=r"http://.*",
 	allow_credentials=True,
-	allow_methods=["GET", "POST", "PUT", "DELETE"],
-	allow_headers=["Content-Type", "Authorization"],
+	allow_methods=["*"],
+	allow_headers=["*"],
 )
 
 class ConnectionManager:
@@ -71,6 +96,7 @@ async def dashboard_broadcaster():
 if not os.path.exists(cfg.SETTINGS_PATH):
 	default_settings = {
 	"TIMEFRAME": "5m",
+	"PAPER_TRADING": True,
 	"PAPER_BALANCE": 100.0,
 	"RISK_PER_TRADE": 0.01,
 	"MIN_CONFIDENCE": 0.65,
@@ -85,7 +111,7 @@ def read_root():
 	return {"status": "online", "bot": "Mirage Trading"}
 
 _LAST_LIVE_STATE = {
-	"pnl_total": 0, "win_rate": 0, "total_operaciones": 0, "operaciones_activas": []
+	"pnl_total": 0, "pnl_diario": 0, "win_rate": 0, "total_operaciones": 0, "operaciones_activas": []
 }
 _LAST_HISTORY_STATE = {
 	"chart_data": [], "ultimas_operaciones": []
@@ -139,6 +165,24 @@ def _fetch_dashboard_data():
 				_LAST_LIVE_STATE = data
 			else:
 				data = _LAST_LIVE_STATE.copy()
+
+			# Validar operaciones_activas contra archivos en disco para eliminar operaciones fantasma
+			filtered_active = []
+			for op in data.get("operaciones_activas", []):
+				pair = op.get("pair")
+				if pair:
+					active_file = os.path.join(cfg.STORAGE_DIR, f"active_trades_{pair}.json")
+					if os.path.exists(active_file):
+						try:
+							with open(active_file, "r", encoding="utf-8") as f:
+								file_trades = json.load(f)
+							if isinstance(file_trades, list) and len(file_trades) > 0:
+								filtered_active.append(op)
+						except Exception:
+							pass
+					else:
+						filtered_active.append(op)
+			data["operaciones_activas"] = filtered_active
 		except Exception as e:
 			logger.error(f"Error reading SQLite system_state: {e}")
 			data = _LAST_LIVE_STATE.copy()
@@ -149,16 +193,33 @@ def _fetch_dashboard_data():
 		if "balance_actual" not in data or data["balance_actual"] == 0:
 			data["balance_actual"] = current_config.get("PAPER_BALANCE", 0)
 
+		# 4. Asegurar pnl_diario (si no viene en system_state, calcularlo directo de DB)
+		if "pnl_diario" not in data or data["pnl_diario"] is None:
+			try:
+				from datetime import datetime
+				today_prefix = datetime.now().strftime('%Y-%m-%d') + '%'
+				conn_daily = sqlite3.connect(cfg.DB_PATH, timeout=5.0)
+				r_daily = conn_daily.execute(
+					"SELECT SUM(pnl_usdt) FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' AND timestamp LIKE ?",
+					(today_prefix,)
+				).fetchone()
+				conn_daily.close()
+				data["pnl_diario"] = round(float(r_daily[0]), 2) if (r_daily and r_daily[0] is not None) else 0.0
+			except Exception as e:
+				logger.error(f"Error calculating fallback pnl_diario: {e}")
+				data["pnl_diario"] = 0.0
+
 		# Sincronizar pares activos desde la configuración cargada
 		pares_cfg = current_config.get("PARES_ACTIVOS", cfg.PARES_ACTIVOS)
 		data["pares_activos"] = [str(p).strip().upper() for p in pares_cfg]
+		data["notifications"] = nm.get_notifications()
 
 		# Cambio de fuente: Leer desde SQLite en lugar de CSV
 		if os.path.exists(cfg.DB_PATH):
 			try:
 				conn = sqlite3.connect(cfg.DB_PATH, timeout=5.0) # Añadido timeout para mitigar bloqueos
-				# Filtramos UNKNOWN y limitamos para no saturar el JSON si el historial crece mucho
-				query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' ORDER BY timestamp ASC"
+				# Filtramos UNKNOWN y TESTUSDT y limitamos para no saturar el JSON
+				query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' ORDER BY timestamp DESC"
 				df = pd.read_sql(query, conn)
 				conn.close()
 
@@ -167,7 +228,7 @@ def _fetch_dashboard_data():
 					data["chart_data"] = df.tail(30)[['timestamp', 'pnl_acumulado']].rename(
 						columns={'pnl_acumulado': 'pnl', 'timestamp': 'time'}
 					).to_dict(orient="records")
-					data["ultimas_operaciones"] = df.tail(100).to_dict(orient="records")
+					data["ultimas_operaciones"] = df.head(100).to_dict(orient="records")
 					_LAST_HISTORY_STATE = {"chart_data": data["chart_data"], "ultimas_operaciones": data["ultimas_operaciones"]}
 				else:
 					data["chart_data"] = []
@@ -180,7 +241,7 @@ def _fetch_dashboard_data():
 			data["chart_data"] = []
 			data["ultimas_operaciones"] = []
 
-		return data
+		return sanitize_nan(data)
 	except Exception as e:
 		logger.error(f"Error in _fetch_dashboard_data: {e}")
 		return {"error": str(e)}
@@ -208,7 +269,7 @@ async def get_full_performance(_ = Depends(verify_auth)):
 	try:
 		if os.path.exists(cfg.DB_PATH):
 			conn = sqlite3.connect(cfg.DB_PATH, timeout=15.0)
-			df = pd.read_sql("SELECT * FROM trades ORDER BY timestamp ASC", conn)
+			df = pd.read_sql("SELECT * FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' ORDER BY timestamp ASC", conn)
 			conn.close()
 			data = df.to_dict(orient="records")
 			logger.info(f"📊 Sirviendo historial desde DB: {len(data)} registros encontrados.")
@@ -220,27 +281,60 @@ async def get_full_performance(_ = Depends(verify_auth)):
 
 class CommandInput(BaseModel):
 	action: str
+	symbol: str | None = None
 
 @app.post("/api/commands")
 def send_command(cmd: CommandInput, _ = Depends(verify_auth)):
 	command_path = os.path.join(cfg.STORAGE_DIR, "commands.json")
 	try:
+		payload = {"action": cmd.action, "timestamp": pd.Timestamp.utcnow().isoformat()}
+		if cmd.symbol:
+			payload["symbol"] = cmd.symbol.upper()
 		with open(command_path, "w", encoding="utf-8") as f:
-			json.dump({"action": cmd.action, "timestamp": pd.Timestamp.utcnow().isoformat()}, f)
-		return {"status": "ok", "command": cmd.action}
+			json.dump(payload, f)
+		return {"status": "ok", "command": cmd.action, "symbol": cmd.symbol}
 	except Exception as e:
+		return {"error": str(e)}
+
+@app.post("/api/close_position/{symbol}")
+def close_position_by_symbol(symbol: str, _ = Depends(verify_auth)):
+	clean_symbol = symbol.strip().upper()
+	command_path = os.path.join(cfg.STORAGE_DIR, "commands.json")
+	try:
+		with open(command_path, "w", encoding="utf-8") as f:
+			json.dump({"action": "CLOSE_POSITION", "symbol": clean_symbol, "timestamp": pd.Timestamp.utcnow().isoformat()}, f)
+		
+		active_file = os.path.join(cfg.STORAGE_DIR, f"active_trades_{clean_symbol}.json")
+		if os.path.exists(active_file):
+			with open(active_file, "w", encoding="utf-8") as f:
+				json.dump([], f)
+
+		nm.add_notification(
+			"SUCCESS",
+			f"Cierre Solicitado ({clean_symbol})",
+			f"Se ordenó el cierre/limpieza de la posición para {clean_symbol}",
+			clean_symbol
+		)
+		return {"status": "ok", "symbol": clean_symbol}
+	except Exception as e:
+		logger.error(f"Error closing position {symbol}: {e}")
 		return {"error": str(e)}
 
 @app.get("/api/chart/{symbol}")
 def get_chart_data(symbol: str, tf: str = None, _ = Depends(verify_auth)):
 	import ccxt
 	try:
-		exchange = ccxt.binance({'options': {'defaultType': 'future'}})
+		clean_symbol = symbol.strip().upper()
+		exchange = ccxt.binance({
+			'enableRateLimit': True,
+			'timeout': 10000,
+			'options': {'defaultType': 'future'}
+		})
 		if not tf:
 			with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
 				settings = json.load(f)
 			tf = settings.get("TIMEFRAME", "15m")
-		ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=200)
+		ohlcv = exchange.fetch_ohlcv(clean_symbol, tf, limit=200)
 		data = []
 		for row in ohlcv:
 			data.append({
@@ -253,7 +347,7 @@ def get_chart_data(symbol: str, tf: str = None, _ = Depends(verify_auth)):
 			})
 		return data
 	except Exception as e:
-		logger.error(f"Error fetching chart data: {e}")
+		logger.error(f"Error fetching chart data for {symbol}: {e}")
 		return []
 
 @app.get("/api/parameters")
@@ -287,6 +381,7 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	LEVERAGE: int | None = Field(None, ge=1, le=125)
 	RISK_PER_TRADE: float | None = Field(None, ge=0, le=100)
 	MIN_CONFIDENCE: float | None = Field(None, ge=0, le=100)
+	PAPER_TRADING: bool | None = None
 	PAPER_BALANCE: float | None = Field(None, ge=1)
 	# Gestión de Salidas (Stops) - Permitimos valores desde 0 para flexibilidad total
 	ATR_MULTIPLIER: float | None = Field(None, ge=0)
@@ -320,6 +415,7 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	MIN_SIZE_USDT: float | None = Field(None, ge=0)
 	# Parámetros adicionales
 	TRAILING_ATR_MULTIPLIER: float | None = Field(None, ge=0)
+	USE_LIMIT_ORDERS: bool | None = None
 	VETO_CRASH_PCT: float | None = Field(None, ge=0, le=100)
 	GLOBAL_RSI_OB_BASE: float | None = Field(None, ge=0)
 	GLOBAL_RSI_OS_BASE: float | None = Field(None, ge=0)
@@ -354,18 +450,26 @@ def update_config(new_settings: ConfigUpdate, _ = Depends(verify_auth)):
 		"ADAPTIVE_RISK_FLOOR",
 		"ADAPTIVE_RISK_CEIL",
 		"ADAPTIVE_DRAWDOWN_FLOOR",
-		"ADAPTIVE_GROWTH_CEIL",
 		"VETO_CRASH_PCT",
 	]
 	
 	for field in percentage_fields:
 		if field in validated:
 			value = validated[field]
-			if value > 1:
+			if value >= 1:
 				validated[field] = value / 100.0
 	
+	if "PARES_ACTIVOS" in validated and isinstance(validated["PARES_ACTIVOS"], list):
+		validated["PARES_ACTIVOS"] = [str(p).strip().upper() for p in validated["PARES_ACTIVOS"]]
+
 	merged = {**current, **validated}
 	with open(cfg.SETTINGS_PATH, "w", encoding="utf-8") as f:
 		json.dump(merged, f, indent=4)
-	
+
 	return {"status": "success", "updated_keys": list(validated.keys())}
+
+
+@app.delete("/api/notifications")
+def clear_all_notifications(_ = Depends(verify_auth)):
+	nm.clear_notifications()
+	return {"status": "success", "message": "Bandeja de notificaciones limpiada"}
