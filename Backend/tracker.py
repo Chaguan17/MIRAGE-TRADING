@@ -135,22 +135,30 @@ class TradeTracker:
         order_str = f" | OrderID={order_id}" if order_id else ""
         print(f"📝 {action} {self.symbol} @ {entry_price:.4f} | TP={tp:.4f} | {sl_str}{order_str}")
 
-    def update_market_price(self, current_price):
+    def update_market_price(self, current_price, is_paper=True):
         with self._trades_lock:
             trades_copy = list(self.active_trades)
 
         for trade in trades_copy:
+            is_long = (trade['action'] == 'LONG')
+            floating_pnl = (current_price - trade['entry_price']) * trade['size'] if is_long else (trade['entry_price'] - current_price) * trade['size']
+            trade['current_pnl'] = round(floating_pnl, 4)
+            trade['current_price'] = current_price
+
+            # En MODO REAL (paper_trading=False), el cierre y guardado a DB se hace ÚNICAMENTE vía reconciliación con Binance
+            if not is_paper:
+                continue
+
             close_price = None
             sl_was_hit = False
 
-            if trade['action'] == 'LONG':
+            if is_long:
                 if current_price >= trade['tp']:
                     close_price = trade['tp']
                     sl_was_hit = False
                 elif trade['use_sl'] and trade['sl'] is not None and current_price <= trade['sl']:
                     close_price = trade['sl']
                     sl_was_hit = True
-
             else:  # SHORT
                 if current_price <= trade['tp']:
                     close_price = trade['tp']
@@ -162,14 +170,8 @@ class TradeTracker:
             if close_price is None:
                 continue
 
-            # ── PnL calculado con el precio de cierre REAL ──────────────
-            if trade['action'] == 'LONG':
-                pnl = (close_price - trade['entry_price']) * trade['size']
-            else:
-                pnl = (trade['entry_price'] - close_price) * trade['size']
-
-            # Si el Trailing Stop o Breakeven cerró la operación por encima (en LONG)
-            # o por debajo (en SHORT) del precio de entrada, el PnL es positivo y cuenta como WIN.
+            # ── PnL calculado con el precio de cierre simulado en Paper ──────────────
+            pnl = (close_price - trade['entry_price']) * trade['size'] if is_long else (trade['entry_price'] - close_price) * trade['size']
             result = 'WIN' if pnl >= 0 else 'LOSS'
 
             self._save_to_db(trade, close_price, result, pnl, sl_was_hit)
@@ -197,8 +199,11 @@ class TradeTracker:
     def force_close(self, close_price, api):
         """Cierra de emergencia todas las posiciones."""
         import executor
-        
-        for trade in self.active_trades[:]:
+
+        with self._trades_lock:
+            trades_copy = list(self.active_trades)
+
+        for trade in trades_copy:
             pnl = (close_price - trade['entry_price']) * trade['size'] if trade['action'] == 'LONG' else (trade['entry_price'] - close_price) * trade['size']
             result = "WIN" if pnl > 0 else "LOSS"
             

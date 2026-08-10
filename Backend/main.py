@@ -141,6 +141,62 @@ def main():
     last_backup_dt = None
     last_known_balance = config.PAPER_BALANCE
 
+    # ── Auto-recuperación de posiciones huérfanas en Binance ──────────────
+    if not paper_mode:
+        try:
+            binance_positions = api.get_open_positions()
+            for raw_sym, pos_info in binance_positions.items():
+                sym = raw_sym.replace(":USDT", "").replace("/", "")
+                if sym not in bots:
+                    continue
+                local_trades = bots[sym]["tr"].active_trades
+                if len(local_trades) == 0 and pos_info["contracts"] > 0:
+                    entry_p = pos_info["entry_price"]
+                    contracts = pos_info["contracts"]
+                    side = pos_info["side"]
+                    action = "SHORT" if "SHORT" in side.upper() else "LONG"
+
+                    # Calcular SL/TP dinámicos con ATR
+                    try:
+                        df_atr = api.get_historical_data(sym, config.TIMEFRAME, 100)
+                        if df_atr is not None and len(df_atr) > 14:
+                            import pandas_ta as ta
+                            atr_s = ta.atr(df_atr['high'], df_atr['low'], df_atr['close'], length=14)
+                            atr_val = float(atr_s.iloc[-1]) if atr_s is not None else entry_p * 0.01
+                        else:
+                            atr_val = entry_p * 0.01
+                    except Exception:
+                        atr_val = entry_p * 0.01
+
+                    if action == "SHORT":
+                        sl = round(entry_p + (atr_val * config.ATR_MULTIPLIER), 4)
+                        tp = round(entry_p - (atr_val * config.TP_MULTIPLIER), 4)
+                    else:
+                        sl = round(entry_p - (atr_val * config.ATR_MULTIPLIER), 4)
+                        tp = round(entry_p + (atr_val * config.TP_MULTIPLIER), 4)
+
+                    trade = {
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "action": action,
+                        "method": "Recuperación Binance",
+                        "entry_price": entry_p,
+                        "size": contracts,
+                        "sl": sl,
+                        "tp": tp,
+                        "use_sl": True,
+                        "order_id": None,
+                        "_features": {},
+                        "is_breakeven": False,
+                        "is_trailing": False,
+                    }
+                    bots[sym]["tr"].active_trades.append(trade)
+                    bots[sym]["tr"]._save_active_trades_to_file()
+                    print(f"🔄 RECUPERADA posición huérfana: {action} {sym} @ {entry_p} | Size: {contracts} | SL: {sl} | TP: {tp}")
+                    nm.add_notification("WARNING", f"Posición Huérfana Recuperada ({sym})",
+                                        f"{action} @ {entry_p} | {contracts} contratos | SL={sl} TP={tp}", sym)
+        except Exception as e:
+            logger.warning(f"Error en auto-recuperación de posiciones: {e}")
+
     timeframes_to_track = list(set([config.TIMEFRAME, "1h", "4h", "1m"]))
     symbols_to_track = list(pares_activos)
     if "BTCUSDT" not in symbols_to_track:
@@ -260,6 +316,8 @@ def main():
                 if action == "PANIC_SELL":
                     print("\n🚨🚨 PANIC BUTTON ACTIVADO 🚨🚨 Cerrando todas las operaciones...")
                     for sym in pares_activos:
+                        if sym not in bots:
+                            continue
                         b = bots[sym]
                         if len(b["tr"].active_trades) > 0:
                             live_1m = stream_manager.get_data(sym, "1m")
@@ -281,52 +339,72 @@ def main():
         if not api.paper_trading:
             try:
                 real_positions = api.get_open_positions(pares_activos)
-                for sym in pares_activos:
-                    b = bots[sym]
-                    with b["tr"]._trades_lock:
-                        active_in_mem = list(b["tr"].active_trades)
-                    real_pos = real_positions.get(sym)
+                if real_positions is None:
+                    logger.warning("⚠️ Fallo consultando posiciones en Binance (posible corte de red). Saltando reconciliación en este ciclo.")
+                else:
+                    for sym in pares_activos:
+                        if sym not in bots:
+                            continue
+                        b = bots[sym]
+                        with b["tr"]._trades_lock:
+                            active_in_mem = list(b["tr"].active_trades)
+                        real_pos = real_positions.get(sym) or real_positions.get(sym + ":USDT")
 
-                    # Si el bot tiene trades activos en memoria pero en Binance la posición YA NO EXISTE
-                    # (ej: se cerró en el exchange por Stop Loss, Take Profit o cierre manual)
-                    if active_in_mem and not real_pos:
-                        logger.info(f"🔄 Reconciliación Real: {sym} ya fue cerrada en Binance. Limpiando memoria...")
-                        last_p = b.get("last_price")
-                        if not last_p:
-                            live_1m = stream_manager.get_data(sym, "1m")
-                            last_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else active_in_mem[0].get('entry_price', 0)
+                        # Si el bot tiene trades activos en memoria pero en Binance la posición YA NO EXISTE
+                        # (ej: se cerró en el exchange por Stop Loss, Take Profit o cierre manual)
+                        if active_in_mem and not real_pos:
+                            logger.info(f"🔄 Reconciliación Real: {sym} ya fue cerrada en Binance. Consultando ejecuciones reales...")
+                            
+                            # Consultar ejecuciones reales en Binance para obtener el precio exacto de salida
+                            real_close_price = None
+                            try:
+                                recent_trades = api.client.fetch_my_trades(sym, limit=5)
+                                if recent_trades:
+                                    last_trade = recent_trades[-1]
+                                    real_close_price = float(last_trade.get('price', 0) or 0)
+                            except Exception as trade_fetch_err:
+                                logger.warning(f"No se pudo obtener el historial exacto de Binance para {sym}: {trade_fetch_err}")
 
-                        for t in active_in_mem:
-                            pnl = (last_p - t['entry_price']) * t['size'] if t['action'] == 'LONG' else (t['entry_price'] - last_p) * t['size']
-                            res = "WIN" if pnl >= 0 else "LOSS"
-                            b["tr"]._save_to_db(t, last_p, res, pnl, sl_was_hit=None)
-                            with b["tr"]._trades_lock:
-                                if t in b["tr"].active_trades:
-                                    b["tr"].active_trades.remove(t)
-                        b["tr"]._save_active_trades_to_file()
-                        nm.add_notification(
-                            "INFO",
-                            f"Posición Sincronizada ({sym})",
-                            f"Se detectó que la posición fue cerrada en Binance (TP/SL o manual). Memoria liberada.",
-                            sym
-                        )
+                            if not real_close_price or real_close_price <= 0:
+                                last_p = b.get("last_price")
+                                if not last_p:
+                                    live_1m = stream_manager.get_data(sym, "1m")
+                                    last_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else active_in_mem[0].get('entry_price', 0)
+                                real_close_price = last_p
+
+                            for t in active_in_mem:
+                                pnl = (real_close_price - t['entry_price']) * t['size'] if t['action'] == 'LONG' else (t['entry_price'] - real_close_price) * t['size']
+                                res = "WIN" if pnl >= 0 else "LOSS"
+                                b["tr"]._save_to_db(t, real_close_price, res, pnl, sl_was_hit=None)
+                                with b["tr"]._trades_lock:
+                                    if t in b["tr"].active_trades:
+                                        b["tr"].active_trades.remove(t)
+                            b["tr"]._save_active_trades_to_file()
+                            nm.add_notification(
+                                "INFO",
+                                f"Posición Sincronizada ({sym})",
+                                f"Se detectó cierre real en Binance @ ${real_close_price:.4f}. Memoria liberada.",
+                                sym
+                            )
             except Exception as sync_err:
                 logger.error(f"Error durante sincronización de posiciones con Binance: {sync_err}")
 
 
         # ── SOLUCIÓN PUNTO 3: Obtención anticipada del contexto global de BTC ──
         global_btc_features = None
-        if "BTCUSDT" in pares_activos or btc_context_engine:
+        if ("BTCUSDT" in pares_activos and "BTCUSDT" in bots) or btc_context_engine:
             btc_raw = stream_manager.get_data("BTCUSDT", config.TIMEFRAME)
             btc_1h = stream_manager.get_data("BTCUSDT", "1h")
             btc_4h = stream_manager.get_data("BTCUSDT", "4h")
             
-            engine = bots["BTCUSDT"]["engine"] if "BTCUSDT" in pares_activos else btc_context_engine
-            if btc_raw is not None:
+            engine = bots["BTCUSDT"]["engine"] if ("BTCUSDT" in pares_activos and "BTCUSDT" in bots) else btc_context_engine
+            if btc_raw is not None and engine is not None:
                 global_btc_features = engine.prepare_features(btc_raw, btc_1h, btc_4h)
 
         print("\n" + "═" * 64)
         for sym in pares_activos:
+            if sym not in bots:
+                continue
             b = bots[sym]
             try:
                 # Optimización: si procesamos BTCUSDT y ya lo descargamos arriba para el contexto, lo reutilizamos
@@ -380,7 +458,7 @@ def main():
                         t["is_trailing"] = True
 
                 trades_before = len(b["tr"].active_trades)
-                b["tr"].update_market_price(current_price)
+                b["tr"].update_market_price(current_price, is_paper=paper_mode)
                 if len(b["tr"].active_trades) < trades_before:
                     _, consecutive_losses = b["rm"].get_streak_info()
                     if consecutive_losses > 0:
@@ -466,7 +544,6 @@ def main():
                     and confidence > config.MIN_CONFIDENCE
                     and len(b["tr"].active_trades) == 0
                     and b["cooldown_left"] == 0
-                    and use_sl  # Enforce SL safety: veto entry if AI predicts SL will be hit
                 )
 
                 if can_trade:
@@ -500,6 +577,7 @@ def main():
                                 size=size,
                                 sl=sl if use_sl else None,
                                 tp=tp,
+                                signal_price=current_price,
                             )
                             if order:
                                 b["tr"].register_trade(

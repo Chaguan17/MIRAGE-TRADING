@@ -95,7 +95,7 @@ async def dashboard_broadcaster():
 
 if not os.path.exists(cfg.SETTINGS_PATH):
 	default_settings = {
-	"TIMEFRAME": "5m",
+	"TIMEFRAME": "1m",
 	"PAPER_TRADING": True,
 	"PAPER_BALANCE": 100.0,
 	"RISK_PER_TRADE": 0.01,
@@ -166,23 +166,85 @@ def _fetch_dashboard_data():
 			else:
 				data = _LAST_LIVE_STATE.copy()
 
-			# Validar operaciones_activas contra archivos en disco para eliminar operaciones fantasma
-			filtered_active = []
-			for op in data.get("operaciones_activas", []):
-				pair = op.get("pair")
-				if pair:
-					active_file = os.path.join(cfg.STORAGE_DIR, f"active_trades_{pair}.json")
-					if os.path.exists(active_file):
+			# Reconstrucción proactiva de operaciones activas leyendo los JSON en storage/
+			active_trades = []
+			if os.path.exists(cfg.STORAGE_DIR):
+				for file_name in os.listdir(cfg.STORAGE_DIR):
+					if file_name.startswith("active_trades_") and file_name.endswith(".json"):
+						pair = file_name.replace("active_trades_", "").replace(".json", "")
+						if pair == "TESTUSDT" or pair == "UNKNOWN":
+							continue
+						path = os.path.join(cfg.STORAGE_DIR, file_name)
 						try:
-							with open(active_file, "r", encoding="utf-8") as f:
-								file_trades = json.load(f)
-							if isinstance(file_trades, list) and len(file_trades) > 0:
-								filtered_active.append(op)
-						except Exception:
-							pass
-					else:
-						filtered_active.append(op)
-			data["operaciones_activas"] = filtered_active
+							with open(path, "r", encoding="utf-8") as f:
+								content = f.read().strip()
+								trades_list = json.loads(content) if content else []
+							if isinstance(trades_list, list):
+								for t in trades_list:
+									size_val = float(t.get("size", 0))
+									entry_val = float(t.get("entry_price", 0))
+									active_trades.append({
+										"pair": pair,
+										"type": t.get("action", "LONG"),
+										"entry": entry_val,
+										"size": size_val,
+										"tp": float(t.get("tp", 0)),
+										"sl": float(t.get("sl", 0)) if t.get("sl") is not None else 0,
+										"bullets": int(t.get("bullets", 1)),
+										"position_value": float(t.get("position_value", 0)) or (size_val * entry_val),
+										"current_pnl": float(t.get("current_pnl", 0)),
+										"current_price": float(t.get("current_price", entry_val)) or entry_val,
+										"timestamp": t.get("timestamp", "")
+									})
+						except Exception as err:
+							logger.error(f"Error parsing active trades file {file_name}: {err}")
+
+			# Enriquecer directamente desde Binance si está en Modo Real para cero desincronización
+			if not current_config.get("PAPER_TRADING", True) and cfg.API_KEY:
+				try:
+					from binance_api import MirageBinance
+					real_client = MirageBinance(cfg.API_KEY, cfg.API_SECRET, paper_trading=False)
+					real_positions = real_client.get_open_positions()
+					
+					active_pairs_in_list = {t["pair"] for t in active_trades}
+
+					for sym, real_pos in real_positions.items():
+						clean_sym = sym.replace(":USDT", "").replace("/", "")
+						if clean_sym not in active_pairs_in_list:
+							# Si la posición está abierta en Binance pero no estaba en la lista local
+							active_trades.append({
+								"pair": clean_sym,
+								"type": real_pos.get("side", "LONG"),
+								"entry": float(real_pos.get("entry_price", 0)),
+								"size": float(real_pos.get("contracts", 0)),
+								"tp": float(real_pos.get("tp", 0)),
+								"sl": float(real_pos.get("sl", 0)),
+								"bullets": 1,
+								"position_value": round(float(real_pos.get("contracts", 0)) * float(real_pos.get("entry_price", 0)), 2),
+								"current_pnl": float(real_pos.get("pnl", 0)),
+								"current_price": float(real_pos.get("current_price", 0)) or float(real_pos.get("entry_price", 0)),
+								"timestamp": ""
+							})
+						else:
+							for t in active_trades:
+								if t["pair"] == clean_sym:
+									if real_pos.get("entry_price"):
+										t["entry"] = float(real_pos["entry_price"])
+									if real_pos.get("contracts"):
+										t["size"] = float(real_pos["contracts"])
+									if real_pos.get("pnl") is not None:
+										t["current_pnl"] = float(real_pos["pnl"])
+									if real_pos.get("current_price"):
+										t["current_price"] = float(real_pos["current_price"])
+									if real_pos.get("sl"):
+										t["sl"] = float(real_pos["sl"])
+									if real_pos.get("tp"):
+										t["tp"] = float(real_pos["tp"])
+									t["position_value"] = round(t["size"] * t["entry"], 2)
+				except Exception as binance_sync_err:
+					logger.warning(f"No se pudo sincronizar directamente con Binance: {binance_sync_err}")
+			
+			data["operaciones_activas"] = active_trades
 		except Exception as e:
 			logger.error(f"Error reading SQLite system_state: {e}")
 			data = _LAST_LIVE_STATE.copy()
@@ -253,14 +315,25 @@ def get_dashboard_data(_ = Depends(verify_auth)):
 
 @app.websocket("/ws/dashboard")
 async def dashboard_websocket(websocket: WebSocket, _ = Depends(verify_auth)):
-	"""Suspensión de WebSocket para actualizaciones en tiempo real."""
+	"""WebSocket con push periódico cada 3s para precios en tiempo real."""
 	await manager.connect(websocket)
 	try:
 		# Envío inicial inmediato al conectar
-		await websocket.send_json(_fetch_dashboard_data())
+		await websocket.send_json(sanitize_nan(_fetch_dashboard_data()))
 		while True:
-			await websocket.receive_text() # Mantiene la conexión viva y escucha desconexiones
+			try:
+				# Espera mensajes del cliente con timeout de 3s
+				# Si no llega nada en 3s, envía datos frescos
+				await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
+			except asyncio.TimeoutError:
+				# Timeout = hora de enviar datos frescos al frontend
+				try:
+					await websocket.send_json(sanitize_nan(_fetch_dashboard_data()))
+				except Exception:
+					break
 	except WebSocketDisconnect:
+		manager.disconnect(websocket)
+	except Exception:
 		manager.disconnect(websocket)
 
 @app.get("/api/performance")
@@ -273,7 +346,7 @@ async def get_full_performance(_ = Depends(verify_auth)):
 			conn.close()
 			data = df.to_dict(orient="records")
 			logger.info(f"📊 Sirviendo historial desde DB: {len(data)} registros encontrados.")
-			return data
+			return sanitize_nan(data)
 		return []
 	except Exception as e:
 		logger.error(f"Error reading full history: {e}")
@@ -303,16 +376,11 @@ def close_position_by_symbol(symbol: str, _ = Depends(verify_auth)):
 	try:
 		with open(command_path, "w", encoding="utf-8") as f:
 			json.dump({"action": "CLOSE_POSITION", "symbol": clean_symbol, "timestamp": pd.Timestamp.utcnow().isoformat()}, f)
-		
-		active_file = os.path.join(cfg.STORAGE_DIR, f"active_trades_{clean_symbol}.json")
-		if os.path.exists(active_file):
-			with open(active_file, "w", encoding="utf-8") as f:
-				json.dump([], f)
 
 		nm.add_notification(
 			"SUCCESS",
 			f"Cierre Solicitado ({clean_symbol})",
-			f"Se ordenó el cierre/limpieza de la posición para {clean_symbol}",
+			f"Se envió la orden de cierre para {clean_symbol}. El orquestador la procesará en Binance.",
 			clean_symbol
 		)
 		return {"status": "ok", "symbol": clean_symbol}
@@ -416,6 +484,8 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	# Parámetros adicionales
 	TRAILING_ATR_MULTIPLIER: float | None = Field(None, ge=0)
 	USE_LIMIT_ORDERS: bool | None = None
+	DCA_ATR_MULT_1: float | None = Field(None, ge=0)
+	DCA_ATR_MULT_2: float | None = Field(None, ge=0)
 	VETO_CRASH_PCT: float | None = Field(None, ge=0, le=100)
 	GLOBAL_RSI_OB_BASE: float | None = Field(None, ge=0)
 	GLOBAL_RSI_OS_BASE: float | None = Field(None, ge=0)

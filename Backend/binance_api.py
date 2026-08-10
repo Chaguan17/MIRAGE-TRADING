@@ -4,6 +4,14 @@ import pandas as pd
 import logging
 import config
 
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +48,7 @@ class MirageBinance:
         self._used_margin   = 0.0 # Margen ocupado por trades abiertos
 
         key_preview = str(api_key)[:5] if api_key else "NINGUNA"
-        print(f"🔑 Llave detectada: {key_preview}...")
+        logger.info(f"Llave detectada: {key_preview}...")
 
         self.client = ccxt.binance({
             'apiKey':          api_key,
@@ -54,7 +62,7 @@ class MirageBinance:
         self.client.set_sandbox_mode(False)
 
         if self.paper_trading:
-            print(f"🛡️ MODO PAPER TRADING | Balance simulado: {self._paper_balance} USDT")
+            logger.info(f"MODO PAPER TRADING | Balance simulado: {self._paper_balance} USDT")
 
     # ── GESTIÓN DE MARGEN SIMULADO ────────────────────────────────
 
@@ -124,6 +132,8 @@ class MirageBinance:
                 err_str = str(e)
                 if "No need to change" in err_str or "MARGIN_TYPE_UNCHANGED" in err_str:
                     logger.info(f"ℹ️ {symbol}: Modo de margen ya es ISOLATED")
+                elif "-4067" in err_str or "open orders" in err_str.lower():
+                    logger.warning(f"⚠️ {symbol}: No se pudo cambiar el margen porque existen órdenes abiertas (SL/TP activo). Asumiendo margen correcto.")
                 else:
                     logger.error(f"❌ {symbol}: Error al cambiar margin_type a ISOLATED: {e}")
                     print(f"⚠️ {symbol}: Error al cambiar modo de margen a ISOLATED: {e}")
@@ -224,7 +234,7 @@ class MirageBinance:
     def get_open_positions(self, symbols=None):
         """
         Devuelve un diccionario { 'XRPUSDT': {'contracts': 41.7, 'side': 'SHORT', ...} }
-        con las posiciones reales abiertas en Binance Futuros.
+        con las posiciones reales abiertas en Binance Futuros y sus TP/SL activos.
         """
         if self.paper_trading:
             return {}
@@ -235,13 +245,30 @@ class MirageBinance:
                 contracts = float(p.get('contracts', 0) or 0)
                 sym = p.get('symbol', '').replace('/', '')
                 if contracts > 0:
+                    sl = 0.0
+                    tp = 0.0
+                    try:
+                        orders = self.client.fetch_open_orders(sym)
+                        for o in orders:
+                            o_type = str(o.get('type', '')).upper()
+                            trigger_p = float(o.get('stopPrice', 0) or o.get('price', 0) or 0)
+                            if 'STOP' in o_type:
+                                sl = trigger_p
+                            elif 'TAKE_PROFIT' in o_type or 'LIMIT' in o_type:
+                                tp = trigger_p
+                    except Exception:
+                        pass
+
                     res[sym] = {
                         'contracts': contracts,
                         'side': str(p.get('side', '')).upper(),
                         'entry_price': float(p.get('entryPrice', 0) or 0),
+                        'current_price': float(p.get('markPrice', 0) or p.get('entryPrice', 0) or 0),
                         'pnl': float(p.get('unrealizedPnl', 0) or 0),
+                        'sl': sl,
+                        'tp': tp,
                     }
             return res
         except Exception as e:
             logger.error(f"Error fetching open positions from Binance: {e}")
-            return {}
+            return None

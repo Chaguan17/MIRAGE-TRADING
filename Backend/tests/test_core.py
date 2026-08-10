@@ -272,3 +272,25 @@ class TestMirageBinanceStructure:
         """OHLCV_COLUMNS debe tener exactamente las 6 columnas esperadas."""
         from binance_api import MirageBinance
         assert MirageBinance.OHLCV_COLUMNS == ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+
+
+# ══════════════════════════════════════════════════════════════
+# OPTIMIZER INTEGRITY (Sprint 2)
+# ══════════════════════════════════════════════════════════════
+
+class TestOptimizerIntegrity:
+    """Garantiza que el optimizador no use datos sintéticos o np.random."""
+
+    def test_optimizer_sin_datos_sinteticos_np_random(self):
+        """Falla inmediatamente si alguien reintroduce np.random para datos de features o targets."""
+        import os
+        optimizer_path = os.path.join("brain", "optimizer.py")
+        assert os.path.exists(optimizer_path), "No se encontró optimizer.py"
+
+        with open(optimizer_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        assert "np.random.randn" not in content, "❌ PROHIBIDO: np.random.randn reintroducido en optimizer.py"
+        assert "np.random.seed" not in content, "❌ PROHIBIDO: np.random.seed reintroducido en optimizer.py"
+        assert "exit_time IS NOT NULL" not in content, "❌ PROHIBIDO: Query antigua con exit_time reintroducida en optimizer.py"
+        assert "df['pnl']" not in content, "❌ PROHIBIDO: Columna inexistente df['pnl'] reintroducida en optimizer.py"

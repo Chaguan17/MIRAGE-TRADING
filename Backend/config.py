@@ -17,6 +17,7 @@ STORAGE_DIR      = "storage"
 SETTINGS_PATH    = os.path.join(STORAGE_DIR, "settings.json")
 METADATA_PATH    = os.path.join(STORAGE_DIR, "parameters_metadata.json")
 LIVE_STATE_PATH  = os.path.join(STORAGE_DIR, "live_state.json")
+BEST_PARAMS_PATH = os.path.join(STORAGE_DIR, "best_params.json")
 DB_PATH          = os.path.join(STORAGE_DIR, "mirage_trading.db")
 BACKUP_DIR       = os.path.join(STORAGE_DIR, "backups")
 
@@ -43,11 +44,36 @@ def load_dynamic_settings() -> dict:
     return {}
 
 
+def load_best_params() -> dict:
+    try:
+        if os.path.exists(BEST_PARAMS_PATH):
+            with open(BEST_PARAMS_PATH, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                return json.loads(content) if content else {}
+    except Exception as e:
+        logger.error(f"Error cargando best_params.json: {e}")
+    return {}
+
+
 dyn = load_dynamic_settings()
+best_p = load_best_params()
+
+def get_config_param(key: str, default_val):
+    """
+    Jerarquía estricta de fuentes de verdad:
+    1. Ajustes manuales del usuario en settings.json (dyn.get(key)) -> Máxima prioridad
+    2. Parámetros optimizados por Optuna en best_params.json (best_p.get(key)) -> Segunda prioridad
+    3. Valor por defecto seguro (default_val) -> Tercera prioridad
+    """
+    if key in dyn and dyn[key] is not None:
+        return dyn[key]
+    if key in best_p and best_p[key] is not None:
+        return best_p[key]
+    return default_val
 
 # ── Credenciales ─────────────────────────────────────────────────────────────
-API_KEY    = dyn.get("API_KEY",    os.getenv("BINANCE_API_KEY", ""))
-API_SECRET = dyn.get("API_SECRET", os.getenv("BINANCE_API_SECRET", ""))
+API_KEY    = get_config_param("API_KEY",    os.getenv("BINANCE_API_KEY", ""))
+API_SECRET = get_config_param("API_SECRET", os.getenv("BINANCE_API_SECRET", ""))
 
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_WAIT_SECONDS = 10
@@ -143,6 +169,8 @@ RISK_REDUCTION_FACTOR  = float(dyn.get("RISK_REDUCTION_FACTOR", 0.5))
 NO_SL_SIZE_PCT = float(dyn.get("NO_SL_SIZE_PCT", 0.10))   # % del balance sin SL
 MIN_SIZE_USDT  = float(dyn.get("MIN_SIZE_USDT", 5.0))
 USE_LIMIT_ORDERS = bool(dyn.get("USE_LIMIT_ORDERS", True))   # Órdenes Límite (Maker Fee 0.020%)
+DCA_ATR_MULT_1 = float(dyn.get("DCA_ATR_MULT_1", 1.0))
+DCA_ATR_MULT_2 = float(dyn.get("DCA_ATR_MULT_2", 2.0))
 
 # Stops dinámicos
 ATR_MULTIPLIER        = float(dyn.get("ATR_MULTIPLIER", 1.5))

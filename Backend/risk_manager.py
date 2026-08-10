@@ -18,49 +18,56 @@ class RiskManager:
         self._consecutive_wins   = 0
         self._consecutive_losses = 0
         self._martingale_step    = 0
-        # Referencia de capital inicial para el sistema adaptativo
+        # Referencia de capital inicial y pico histórico (High-Water Mark)
         self._initial_balance    = initial_balance or config.PAPER_BALANCE
+        self._high_water_mark    = self._initial_balance
 
     # ─── Sistema adaptativo ──────────────────────────────────────────────────
 
     def adapt_risk_to_capital(self, current_balance: float) -> float:
         """
-        Ajusta el riesgo base en función del balance actual vs el inicial.
+        Ajusta el riesgo base en función del balance actual vs el pico histórico (High-Water Mark).
 
-        - Si el balance cae por debajo del ADAPTIVE_DRAWDOWN_FLOOR → reduce riesgo
-        - Si el balance supera ADAPTIVE_GROWTH_CEIL → permite escalar
-        - En zona intermedia → usa el riesgo dinámico por rachas
+        - Actualiza constantemente el pico de equidad (_high_water_mark).
+        - Si el balance cae por debajo del ADAPTIVE_DRAWDOWN_FLOOR relativo al pico → reduce riesgo para proteger ganancias acumuladas.
+        - Si el balance alcanza un nuevo récord → escala el riesgo conservadoramente.
         """
-        if not config.ADAPTIVE_RISK_ENABLED:
+        if not config.ADAPTIVE_RISK_ENABLED or current_balance <= 0:
             return self._current_risk
 
-        ratio = current_balance / (self._initial_balance + 1e-9)
+        # Actualizar el pico histórico de balance (High-Water Mark)
+        if current_balance > self._high_water_mark:
+            self._high_water_mark = current_balance
+
+        # Calcular el ratio respecto al pico histórico de la cuenta
+        ratio = current_balance / (self._high_water_mark + 1e-9)
 
         if ratio < config.ADAPTIVE_DRAWDOWN_FLOOR:
-            # Capital menguado → riesgo mínimo de seguridad
+            # Capital menguado respecto al pico → riesgo mínimo de seguridad
             safe_risk = max(
                 config.ADAPTIVE_RISK_FLOOR,
-                self._base_risk * ratio  # proporcional a cuánto ha caído
+                self._base_risk * ratio
             )
             if safe_risk < self._current_risk:
                 logger.warning(
-                    f"⚠️ Balance caído al {ratio:.1%} del inicial → "
+                    f"⚠️ Drawdown detectado ({ratio:.1%} del pico histórico ${self._high_water_mark:.2f}) → "
                     f"riesgo adaptado: {safe_risk:.2%}"
                 )
                 self._current_risk = safe_risk
 
-        elif ratio > config.ADAPTIVE_GROWTH_CEIL:
-            # Capital crecido → permitir aumentar el riesgo conservadoramente
-            growth_risk = min(
-                config.ADAPTIVE_RISK_CEIL,
-                self._base_risk * (1 + (ratio - 1) * 0.3)  # 30% del crecimiento
-            )
-            if growth_risk > self._current_risk:
-                logger.info(
-                    f"📈 Balance creció al {ratio:.1%} del inicial → "
-                    f"riesgo adaptado: {growth_risk:.2%}"
+        elif ratio >= 1.0:
+            growth_ratio = current_balance / (self._initial_balance + 1e-9)
+            if growth_ratio > config.ADAPTIVE_GROWTH_CEIL:
+                growth_risk = min(
+                    config.ADAPTIVE_RISK_CEIL,
+                    self._base_risk * (1 + (growth_ratio - 1) * 0.3)
                 )
-                self._current_risk = growth_risk
+                if growth_risk > self._current_risk:
+                    logger.info(
+                        f"📈 Nuevo pico de balance (${current_balance:.2f}) → "
+                        f"riesgo adaptado: {growth_risk:.2%}"
+                    )
+                    self._current_risk = growth_risk
 
         # Clamp final de seguridad
         self._current_risk = max(
@@ -268,10 +275,21 @@ class RiskManager:
         atr_value: float,
         action: str,
     ) -> list[float]:
+        mult1 = getattr(config, 'DCA_ATR_MULT_1', 1.5)
+        mult2 = getattr(config, 'DCA_ATR_MULT_2', 3.0)
+
+        # Piso de seguridad: Garantiza que la distancia mínima sea al menos 0.8% para DCA 1 y 1.5% para DCA 2
+        # Esto evita re-compras prematuras en oscilaciones de $0.50 o ruido menor.
+        min_dist1 = entry_price * 0.008
+        min_dist2 = entry_price * 0.015
+
+        dist1 = max(atr_value * mult1, min_dist1)
+        dist2 = max(atr_value * mult2, min_dist2)
+
         if action == 'LONG':
-            dca = [entry_price - atr_value * 0.5, entry_price - atr_value * 1.0]
+            dca = [entry_price - dist1, entry_price - dist2]
         else:
-            dca = [entry_price + atr_value * 0.5, entry_price + atr_value * 1.0]
+            dca = [entry_price + dist1, entry_price + dist2]
         return [round(l, 4) for l in dca]
 
     # ─── Getters ─────────────────────────────────────────────────────────────

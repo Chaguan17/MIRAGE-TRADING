@@ -52,11 +52,12 @@ def _safe_create_order(client, symbol, order_type, side, amount, params=None, ac
         raise e
 
 
-def execute_trade(client, symbol, action, size, sl=None, tp=None):
+def execute_trade(client, symbol, action, size, sl=None, tp=None, signal_price=None):
     """
     Envía una orden a Binance Futures.
     Soporta Órdenes Límite Post-Only (GTX Maker Fee = 0.020%) si config.USE_LIMIT_ORDERS es True,
     o Mercado (Taker Fee = 0.050%) si es False.
+    Recalcula dinámicamente SL/TP si el precio real de llenado (actual_fill) difiere de la señal.
     """
     side = 'buy' if action == 'LONG' else 'sell'
     use_limit = getattr(config, 'USE_LIMIT_ORDERS', True)
@@ -125,24 +126,41 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None):
             symbol
         )
 
+        # Precisiones dinámicas por símbolo
+        try:
+            sl_prec = 4 if symbol in ['XRPUSDT', 'HBARUSDT', 'ADAUSDT'] else 2
+        except Exception:
+            sl_prec = 2
+
+        # Recalcular SL y TP si el precio real de llenado difiere del precio de señal
+        actual_fill = float(order.get('avgPrice', 0) or order.get('price', 0) or 0)
+        if actual_fill > 0 and signal_price and signal_price > 0:
+            diff = actual_fill - signal_price
+            if abs(diff) > 0.0001:
+                if sl is not None and sl > 0:
+                    sl = sl + diff
+                    logger.info(f"🔄 SL recalculado por precio de llenado real (${actual_fill:.4f}): {sl:.4f}")
+                if tp is not None and tp > 0:
+                    tp = tp + diff
+                    logger.info(f"🔄 TP recalculado por precio de llenado real (${actual_fill:.4f}): {tp:.4f}")
+
         # Stop Loss en Binance Futures Real
         if sl is not None and sl > 0:
             try:
                 sl_side = 'sell' if action == 'LONG' else 'buy'
-                sl_prec = 4 if symbol in ['XRPUSDT', 'HBARUSDT', 'ADAUSDT'] else 2
                 _safe_create_order(
                     client=client,
                     symbol=symbol,
                     order_type='STOP_MARKET',
                     side=sl_side,
-                    amount=size,
+                    amount=None,  # MUST be None when closePosition: True is passed to Binance API
                     params={
                         'stopPrice': round(sl, sl_prec),
                         'closePosition': True
                     },
                     action=action
                 )
-                logger.info(f"🛡️ SL real colocado en Binance: {sl}")
+                logger.info(f"🛡️ SL real colocado en Binance: {round(sl, sl_prec)}")
             except Exception as sl_err:
                 logger.error(f"⚠️ Error al colocar SL en Binance para {symbol}: {sl_err}")
 
@@ -150,8 +168,7 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None):
         if tp is not None and tp > 0:
             try:
                 tp_side = 'sell' if action == 'LONG' else 'buy'
-                tp_prec = 4 if symbol in ['XRPUSDT', 'HBARUSDT', 'ADAUSDT'] else 2
-                tp_price = round(tp, tp_prec)
+                tp_price = round(tp, sl_prec)
 
                 if use_limit:
                     # TAKE_PROFIT tipo Límite descansa en el libro de Binance y cobra Maker Fee (0.020%)
@@ -160,7 +177,7 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None):
                         symbol=symbol,
                         order_type='TAKE_PROFIT',
                         side=tp_side,
-                        amount=size,
+                        amount=None,  # MUST be None when closePosition: True is passed to Binance API
                         params={
                             'stopPrice': tp_price,
                             'price': tp_price,
@@ -175,7 +192,7 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None):
                         symbol=symbol,
                         order_type='TAKE_PROFIT_MARKET',
                         side=tp_side,
-                        amount=size,
+                        amount=None,  # MUST be None when closePosition: True is passed to Binance API
                         params={
                             'stopPrice': tp_price,
                             'closePosition': True
