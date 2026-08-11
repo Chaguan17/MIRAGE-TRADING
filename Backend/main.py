@@ -559,6 +559,7 @@ def main():
                         entry_price=current_price,
                         stop_loss_price=sl if use_sl else None,
                         current_balance=account_balance,
+                        symbol=sym,
                     )
 
                     if size > 0:
@@ -580,6 +581,7 @@ def main():
                                 signal_price=current_price,
                             )
                             if order:
+                                real_order_id = str(order.get('id') or order.get('orderId') or 'OK') if isinstance(order, dict) else 'OK'
                                 b["tr"].register_trade(
                                     action_str,
                                     current_price,
@@ -589,6 +591,7 @@ def main():
                                     last_row,
                                     use_sl,
                                     method=method_name.upper() if method_name else "CONSENSO IA",
+                                    order_id=real_order_id,
                                 )
                             else:
                                 api.release_margin(margin_needed)
@@ -676,14 +679,17 @@ def main():
 
                 last_t = active_trades_snapshot[-1]
                 
+                sl_val = round(last_t.get("sl"), 4) if last_t.get("sl") else round(avg_entry * (0.98 if last_t["action"] == "LONG" else 1.02), 4)
+                tp_val = round(last_t.get("tp"), 4) if last_t.get("tp") else 0
+
                 web_operaciones_activas_safe.append({
                     "pair": sym,
                     "current_price": round(curr_price, 6),
                     "type": last_t["action"],
                     "method": last_t.get("method", "Consenso IA"),
                     "entry": round(avg_entry, 6),
-                    "tp": round(last_t.get("tp"), 6) if last_t.get("tp") else 0,
-                    "sl": round(last_t.get("sl"), 6) if last_t.get("sl") else 0,
+                    "tp": tp_val,
+                    "sl": sl_val,
                     "current_pnl": round(total_pnl, 2),
                     "is_trailing": any(t.get("is_trailing", False) for t in active_trades_snapshot),
                     "is_breakeven": any(t.get("is_breakeven", False) for t in active_trades_snapshot),

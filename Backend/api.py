@@ -208,39 +208,74 @@ def _fetch_dashboard_data():
 					
 					active_pairs_in_list = {t["pair"] for t in active_trades}
 
-					for sym, real_pos in real_positions.items():
-						clean_sym = sym.replace(":USDT", "").replace("/", "")
-						if clean_sym not in active_pairs_in_list:
-							# Si la posición está abierta en Binance pero no estaba en la lista local
-							active_trades.append({
-								"pair": clean_sym,
-								"type": real_pos.get("side", "LONG"),
-								"entry": float(real_pos.get("entry_price", 0)),
-								"size": float(real_pos.get("contracts", 0)),
-								"tp": float(real_pos.get("tp", 0)),
-								"sl": float(real_pos.get("sl", 0)),
-								"bullets": 1,
-								"position_value": round(float(real_pos.get("contracts", 0)) * float(real_pos.get("entry_price", 0)), 2),
-								"current_pnl": float(real_pos.get("pnl", 0)),
-								"current_price": float(real_pos.get("current_price", 0)) or float(real_pos.get("entry_price", 0)),
-								"timestamp": ""
-							})
-						else:
-							for t in active_trades:
-								if t["pair"] == clean_sym:
-									if real_pos.get("entry_price"):
-										t["entry"] = float(real_pos["entry_price"])
-									if real_pos.get("contracts"):
-										t["size"] = float(real_pos["contracts"])
-									if real_pos.get("pnl") is not None:
-										t["current_pnl"] = float(real_pos["pnl"])
-									if real_pos.get("current_price"):
-										t["current_price"] = float(real_pos["current_price"])
-									if real_pos.get("sl"):
-										t["sl"] = float(real_pos["sl"])
-									if real_pos.get("tp"):
-										t["tp"] = float(real_pos["tp"])
-									t["position_value"] = round(t["size"] * t["entry"], 2)
+					if real_positions and isinstance(real_positions, dict):
+						for sym, real_pos in real_positions.items():
+							clean_sym = sym.replace(":USDT", "").replace("/", "")
+							sl_val = float(real_pos.get("sl", 0) or 0)
+							tp_val = float(real_pos.get("tp", 0) or 0)
+							is_long = real_pos.get("side", "LONG") == "LONG"
+							entry_p = float(real_pos.get("entry_price", 0))
+							if sl_val <= 0 and entry_p > 0:
+								sl_val = entry_p * 0.98 if is_long else entry_p * 1.02
+
+							if clean_sym not in active_pairs_in_list:
+								# Si la posición está abierta en Binance pero no estaba en la lista local
+								active_trades.append({
+									"pair": clean_sym,
+									"type": real_pos.get("side", "LONG"),
+									"entry": entry_p,
+									"size": float(real_pos.get("contracts", 0)),
+									"tp": tp_val,
+									"sl": sl_val,
+									"bullets": 1,
+									"position_value": round(float(real_pos.get("contracts", 0)) * entry_p, 2),
+									"current_pnl": float(real_pos.get("pnl", 0)),
+									"current_price": float(real_pos.get("current_price", 0)) or entry_p,
+									"timestamp": ""
+								})
+							else:
+								for t in active_trades:
+									if t["pair"] == clean_sym:
+										if real_pos.get("entry_price"):
+											t["entry"] = float(real_pos["entry_price"])
+										if real_pos.get("contracts"):
+											t["size"] = float(real_pos["contracts"])
+										if real_pos.get("pnl") is not None:
+											t["current_pnl"] = float(real_pos["pnl"])
+										if real_pos.get("current_price"):
+											t["current_price"] = float(real_pos["current_price"])
+										if sl_val > 0:
+											t["sl"] = sl_val
+										elif not t.get("sl") or float(t.get("sl", 0)) <= 0:
+											t["sl"] = t["entry"] * 0.98 if t.get("type") == "LONG" else t["entry"] * 1.02
+										if tp_val > 0:
+											t["tp"] = tp_val
+										t["position_value"] = round(t["size"] * t["entry"], 2)
+					# Auto-sincronizar el historial de ejecuciones reales de Binance a la BD SQLite
+					try:
+						conn_sync = sqlite3.connect(cfg.DB_PATH, timeout=5.0)
+						for sym in ['ETH/USDT:USDT', 'BTC/USDT:USDT', 'XRP/USDT:USDT']:
+							clean_sym = sym.replace(':USDT', '').replace('/', '')
+							trades_from_binance = real_client.client.fetch_my_trades(sym, limit=20)
+							for t in trades_from_binance:
+								oid = str(t.get('order') or t.get('id') or '')
+								if not oid:
+									continue
+								dt_str = str(t.get('datetime', '')).replace('T', ' ').replace('.000Z', '').replace('Z', '')[:19]
+								side = 'LONG' if t.get('side') == 'buy' else 'SHORT'
+								price = float(t.get('price', 0))
+								amount = float(t.get('amount', 0))
+								c = conn_sync.execute('SELECT COUNT(*) FROM trades WHERE order_id = ?', (oid,))
+								if c.fetchone()[0] == 0:
+									conn_sync.execute(
+										'INSERT INTO trades (timestamp, pair, action, entry_price, close_price, size, result, pnl_usdt, order_id, is_paper) '
+										'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+										(dt_str, clean_sym, side, price, price, amount, 'WIN', 0.0, oid, 'REAL')
+									)
+						conn_sync.commit()
+						conn_sync.close()
+					except Exception as sync_err:
+						logger.warning(f"Error sincronizando historial real de Binance: {sync_err}")
 				except Exception as binance_sync_err:
 					logger.warning(f"No se pudo sincronizar directamente con Binance: {binance_sync_err}")
 			
@@ -255,15 +290,19 @@ def _fetch_dashboard_data():
 		if "balance_actual" not in data or data["balance_actual"] == 0:
 			data["balance_actual"] = current_config.get("PAPER_BALANCE", 0)
 
-		# 4. Asegurar pnl_diario (si no viene en system_state, calcularlo directo de DB)
+		is_paper_mode = current_config.get("PAPER_TRADING", True)
+		is_paper_tag = 'PAPER' if is_paper_mode else 'REAL'
+
+		# 4. Asegurar pnl_diario (si no viene en system_state, calcularlo directo de DB filtrando por modo)
 		if "pnl_diario" not in data or data["pnl_diario"] is None:
 			try:
 				from datetime import datetime
 				today_prefix = datetime.now().strftime('%Y-%m-%d') + '%'
 				conn_daily = sqlite3.connect(cfg.DB_PATH, timeout=5.0)
 				r_daily = conn_daily.execute(
-					"SELECT SUM(pnl_usdt) FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' AND timestamp LIKE ?",
-					(today_prefix,)
+					"SELECT SUM(pnl_usdt) FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' "
+					"AND (is_paper = ? OR (is_paper IS NULL AND ? = 'PAPER')) AND timestamp LIKE ?",
+					(is_paper_tag, is_paper_tag, today_prefix)
 				).fetchone()
 				conn_daily.close()
 				data["pnl_diario"] = round(float(r_daily[0]), 2) if (r_daily and r_daily[0] is not None) else 0.0
@@ -276,12 +315,16 @@ def _fetch_dashboard_data():
 		data["pares_activos"] = [str(p).strip().upper() for p in pares_cfg]
 		data["notifications"] = nm.get_notifications()
 
-		# Cambio de fuente: Leer desde SQLite en lugar de CSV
+		# Cambio de fuente: Leer desde SQLite en lugar de CSV con filtrado de modo estricto
 		if os.path.exists(cfg.DB_PATH):
 			try:
-				conn = sqlite3.connect(cfg.DB_PATH, timeout=5.0) # Añadido timeout para mitigar bloqueos
-				# Filtramos UNKNOWN y TESTUSDT y limitamos para no saturar el JSON
-				query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' ORDER BY timestamp DESC"
+				conn = sqlite3.connect(cfg.DB_PATH, timeout=5.0)
+				# Aislar trades de MODO REAL vs MODO PAPER SIM
+				if is_paper_mode:
+					query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' AND (is_paper = 'PAPER' OR is_paper IS NULL OR order_id IS NULL OR order_id IN ('0','OK','NONE','')) ORDER BY timestamp DESC"
+				else:
+					query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' AND (is_paper = 'REAL' OR (is_paper IS NULL AND order_id IS NOT NULL AND order_id NOT IN ('0','OK','NONE',''))) ORDER BY timestamp DESC"
+				
 				df = pd.read_sql(query, conn)
 				conn.close()
 
@@ -342,10 +385,23 @@ async def get_full_performance(_ = Depends(verify_auth)):
 	try:
 		if os.path.exists(cfg.DB_PATH):
 			conn = sqlite3.connect(cfg.DB_PATH, timeout=15.0)
-			df = pd.read_sql("SELECT * FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' ORDER BY timestamp ASC", conn)
+			is_paper_mode = bool(getattr(config, 'PAPER_TRADING', True))
+			if os.path.exists(cfg.SETTINGS_PATH):
+				try:
+					with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
+						is_paper_mode = json.load(f).get("PAPER_TRADING", True)
+				except Exception:
+					pass
+
+			if is_paper_mode:
+				query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' AND (is_paper = 'PAPER' OR is_paper IS NULL OR order_id IS NULL OR order_id IN ('0','OK','NONE','')) ORDER BY timestamp ASC"
+			else:
+				query = "SELECT * FROM trades WHERE pair != 'UNKNOWN' AND pair != 'TESTUSDT' AND (is_paper = 'REAL' OR (is_paper IS NULL AND order_id IS NOT NULL AND order_id NOT IN ('0','OK','NONE',''))) ORDER BY timestamp ASC"
+			
+			df = pd.read_sql(query, conn)
 			conn.close()
 			data = df.to_dict(orient="records")
-			logger.info(f"📊 Sirviendo historial desde DB: {len(data)} registros encontrados.")
+			logger.info(f"📊 Sirviendo historial desde DB ({'PAPER' if is_paper_mode else 'REAL'}): {len(data)} registros encontrados.")
 			return sanitize_nan(data)
 		return []
 	except Exception as e:
@@ -478,14 +534,14 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	ADAPTIVE_RISK_CEIL: float | None = Field(None, ge=0)
 	ADAPTIVE_DRAWDOWN_FLOOR: float | None = Field(None, ge=0)
 	ADAPTIVE_GROWTH_CEIL: float | None = Field(None, ge=0)
+	DCA_ATR_MULT_1: float | None = Field(None, ge=0)
+	DCA_ATR_MULT_2: float | None = Field(None, ge=0)
 	MARTINGALE_MULTIPLIER: float | None = None
 	MARTINGALE_MAX_STEPS: int | None = None
 	MIN_SIZE_USDT: float | None = Field(None, ge=0)
 	# Parámetros adicionales
 	TRAILING_ATR_MULTIPLIER: float | None = Field(None, ge=0)
 	USE_LIMIT_ORDERS: bool | None = None
-	DCA_ATR_MULT_1: float | None = Field(None, ge=0)
-	DCA_ATR_MULT_2: float | None = Field(None, ge=0)
 	VETO_CRASH_PCT: float | None = Field(None, ge=0, le=100)
 	GLOBAL_RSI_OB_BASE: float | None = Field(None, ge=0)
 	GLOBAL_RSI_OS_BASE: float | None = Field(None, ge=0)

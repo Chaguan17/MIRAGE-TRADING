@@ -130,10 +130,10 @@ class RiskManager:
         entry_price: float,
         stop_loss_price: float | None,
         current_balance: float | None = None,
+        symbol: str = "ETHUSDT",
     ) -> float:
         """
-        Calcula el tamaño de posición.
-        Si se pasa current_balance, el riesgo se adapta al capital real.
+        Calcula el tamaño de posición adaptado a las precisiones y nocional mínimo del símbolo.
         """
         if current_balance is not None:
             self.adapt_risk_to_capital(current_balance)
@@ -159,27 +159,48 @@ class RiskManager:
                 return 0
             size = round((risk_amount / risk_per_coin) / effective_bullets, 6)
 
+        # Determinar precisiones y nocional mínimo según el símbolo en Binance Futuros
+        import math
+        sym_upper = str(symbol or "ETHUSDT").upper()
+        if "BTC" in sym_upper:
+            min_required_notional = 52.5
+            step = 0.001
+            prec = 3
+        elif "ETH" in sym_upper:
+            min_required_notional = 22.5
+            step = 0.001
+            prec = 3
+        elif "XRP" in sym_upper:
+            min_required_notional = 22.5
+            step = 1.0
+            prec = 0
+        else:
+            min_required_notional = max(float(getattr(config, 'MIN_SIZE_USDT', 5.0) or 5.0), 22.5)
+            step = 0.01
+            prec = 2
+
         current_notional = size * entry_price
         if current_notional > max_notional_per_bullet:
             logger.warning(
                 f"📏 Size ajustado: {current_notional:.2f} → "
                 f"{max_notional_per_bullet:.2f} USDT (cap leverage)"
             )
-            size = round(max_notional_per_bullet / entry_price, 6)
+            raw_cap_size = max_notional_per_bullet / entry_price
+            size = round(math.floor(raw_cap_size / step) * step, prec)
 
         current_notional = size * entry_price
-        # Si el notional es menor que el mínimo requerido por Binance (MIN_SIZE_USDT),
-        # pero la cuenta tiene poder de compra suficiente, se ajusta al mínimo exigido.
-        if config.MIN_SIZE_USDT > 0 and current_notional < config.MIN_SIZE_USDT:
-            if total_buying_power >= config.MIN_SIZE_USDT:
+        if current_notional < min_required_notional:
+            if total_buying_power >= min_required_notional:
+                raw_min_size = min_required_notional / entry_price
+                size = round(math.ceil(raw_min_size / step) * step, prec)
+                new_notional = size * entry_price
                 logger.info(
-                    f"📐 Ajustando notional de {current_notional:.2f} USDT al mínimo de Binance "
-                    f"({config.MIN_SIZE_USDT:.2f} USDT)"
+                    f"📐 Ajustando notional de ${current_notional:.2f} USDT al mínimo de Binance "
+                    f"(${new_notional:.2f} USDT | Size: {size})"
                 )
-                size = round(config.MIN_SIZE_USDT / entry_price, 6)
             else:
                 logger.warning(
-                    f"⚠️ Poder de compra {total_buying_power:.2f} USDT < mínimo Binance {config.MIN_SIZE_USDT:.2f} USDT"
+                    f"⚠️ Poder de compra ${total_buying_power:.2f} USDT < mínimo de Binance (${min_required_notional:.2f} USDT)"
                 )
                 return 0
 

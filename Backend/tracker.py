@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class TradeTracker:
     COLUMNAS = [
         'timestamp', 'pair', 'action', 'entry_price', 'close_price',
-        'size', 'result', 'pnl_usdt', 'order_id',
+        'size', 'result', 'pnl_usdt', 'order_id', 'is_paper',
         'RSI', 'ATR', 'ATR_pct', 'EMA_diff', 'EMA_diff_norm',
         'MACD', 'MACD_hist', 'BB_width', 'BB_position',
         'volume_ratio', 'trend_signal', 'above_ema200', 'momentum_signal',
@@ -68,7 +68,7 @@ class TradeTracker:
                 t = "REAL" if (col in ['size', 'entry_price', 'close_price', 'pnl_usdt']
                                or col in self.FEATURE_COLS) else "TEXT"
                 try:
-                    cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {t} DEFAULT 0")
+                    cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {t} DEFAULT 'PAPER'")
                     logger.info(f"🔄 Migración BD: Columna '{col}' añadida a la tabla trades.")
                 except Exception as e:
                     logger.error(f"Error añadiendo columna {col}: {e}")
@@ -78,11 +78,20 @@ class TradeTracker:
 
     def _load_historical_stats(self):
         try:
+            is_paper_str = 'PAPER' if getattr(config, 'PAPER_TRADING', True) else 'REAL'
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             res  = conn.execute(
                 "SELECT COUNT(*), SUM(pnl_usdt), SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) "
-                "FROM trades WHERE pair = ?", (self.symbol,)
+                "FROM trades WHERE pair = ? AND (is_paper = ? OR (is_paper IS NULL AND ? = 'PAPER'))",
+                (self.symbol, is_paper_str, is_paper_str)
             ).fetchone()
+            if res and res[0] > 0:
+                self.total_trades = res[0]
+                self.total_pnl    = res[1] or 0.0
+                self.wins         = res[2] or 0
+                self.losses       = self.total_trades - self.wins
+                self.win_rate     = (self.wins / self.total_trades) * 100
+            conn.close()
             if res and res[0] > 0:
                 self.total_trades = res[0]
                 self.total_pnl    = res[1] or 0.0
@@ -96,11 +105,23 @@ class TradeTracker:
     def _save_active_trades_to_file(self):
         import json
         path = os.path.join('storage', f'active_trades_{self.symbol}.json')
+        tmp_path = path + '.tmp'
         try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self.active_trades, f, indent=4)
+            def _json_serializer(o):
+                if hasattr(o, 'isoformat'):
+                    return o.isoformat()
+                return str(o)
+
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(self.active_trades, f, indent=4, default=_json_serializer)
+            os.replace(tmp_path, path)
         except Exception as e:
             logger.error(f"Error saving active trades for {self.symbol}: {e}")
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
 
     def _load_active_trades_from_file(self):
         import json
@@ -108,7 +129,8 @@ class TradeTracker:
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
-                    self.active_trades = json.load(f)
+                    content = f.read().strip()
+                    self.active_trades = json.loads(content) if content else []
                 logger.info(f"🔄 Restaurados {len(self.active_trades)} trades activos para {self.symbol} desde archivo.")
             except Exception as e:
                 logger.error(f"Error loading active trades for {self.symbol}: {e}")
@@ -239,6 +261,7 @@ class TradeTracker:
             'result':      result,
             'pnl_usdt':    round(pnl, 4),
             'order_id':    trade.get('order_id'),
+            'is_paper':    'PAPER' if getattr(config, 'PAPER_TRADING', True) else 'REAL',
             'sl_was_used': int(trade['use_sl']),
             'sl_was_hit':  int(sl_was_hit) if sl_was_hit is not None else 0,
             **{col: trade.get(col, 0) for col in self.FEATURE_COLS},

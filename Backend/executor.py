@@ -19,7 +19,7 @@ def is_paper_trading(client):
     return True
 
 
-def _safe_create_order(client, symbol, order_type, side, amount, params=None, action='LONG'):
+def _safe_create_order(client, symbol, order_type, side, amount, price=None, params=None, action='LONG'):
     """
     Crea una orden en Binance. Si Binance devuelve el error -4061 (Hedge Mode setting),
     reintenta automáticamente adjuntando el parámetro positionSide ('LONG' o 'SHORT').
@@ -35,6 +35,7 @@ def _safe_create_order(client, symbol, order_type, side, amount, params=None, ac
             type=order_type,
             side=side.upper(),
             amount=amount,
+            price=price,
             params=params
         )
     except Exception as e:
@@ -47,6 +48,7 @@ def _safe_create_order(client, symbol, order_type, side, amount, params=None, ac
                 type=order_type,
                 side=side.upper(),
                 amount=amount,
+                price=price,
                 params=hedge_params
             )
         raise e
@@ -98,7 +100,8 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None, signal_price=N
                     order_type='LIMIT',
                     side=side,
                     amount=size,
-                    params={'price': limit_price, 'timeInForce': 'GTX'},
+                    price=limit_price,
+                    params={'timeInForce': 'GTX'},
                     action=action
                 )
             except Exception as limit_err:
@@ -144,62 +147,51 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None, signal_price=N
                     tp = tp + diff
                     logger.info(f"🔄 TP recalculado por precio de llenado real (${actual_fill:.4f}): {tp:.4f}")
 
-        # Stop Loss en Binance Futures Real
+        # Breve pausa para asegurar asentamiento del contrato en el motor de posiciones de Binance
+        import time
+        time.sleep(0.2)
+
+        # Stop Loss en Binance Futures Real (Position-Level)
         if sl is not None and sl > 0:
             try:
                 sl_side = 'sell' if action == 'LONG' else 'buy'
+                sl_price = round(sl, sl_prec)
                 _safe_create_order(
                     client=client,
                     symbol=symbol,
                     order_type='STOP_MARKET',
                     side=sl_side,
-                    amount=None,  # MUST be None when closePosition: True is passed to Binance API
+                    amount=None,
+                    price=None,
                     params={
-                        'stopPrice': round(sl, sl_prec),
+                        'stopPrice': sl_price,
                         'closePosition': True
                     },
                     action=action
                 )
-                logger.info(f"🛡️ SL real colocado en Binance: {round(sl, sl_prec)}")
+                logger.info(f"🛡️ SL real de posición colocado en Binance: {sl_price}")
             except Exception as sl_err:
                 logger.error(f"⚠️ Error al colocar SL en Binance para {symbol}: {sl_err}")
 
-        # Take Profit LÍMITE (Maker 0.020%) en Binance Futures Real
+        # Take Profit en Binance Futures Real (Position-Level)
         if tp is not None and tp > 0:
             try:
                 tp_side = 'sell' if action == 'LONG' else 'buy'
                 tp_price = round(tp, sl_prec)
-
-                if use_limit:
-                    # TAKE_PROFIT tipo Límite descansa en el libro de Binance y cobra Maker Fee (0.020%)
-                    _safe_create_order(
-                        client=client,
-                        symbol=symbol,
-                        order_type='TAKE_PROFIT',
-                        side=tp_side,
-                        amount=None,  # MUST be None when closePosition: True is passed to Binance API
-                        params={
-                            'stopPrice': tp_price,
-                            'price': tp_price,
-                            'closePosition': True
-                        },
-                        action=action
-                    )
-                    logger.info(f"🎯 TP Límite Maker (0.020%) colocado en Binance: {tp_price}")
-                else:
-                    _safe_create_order(
-                        client=client,
-                        symbol=symbol,
-                        order_type='TAKE_PROFIT_MARKET',
-                        side=tp_side,
-                        amount=None,  # MUST be None when closePosition: True is passed to Binance API
-                        params={
-                            'stopPrice': tp_price,
-                            'closePosition': True
-                        },
-                        action=action
-                    )
-                    logger.info(f"🎯 TP Mercado colocado en Binance: {tp_price}")
+                _safe_create_order(
+                    client=client,
+                    symbol=symbol,
+                    order_type='TAKE_PROFIT_MARKET',
+                    side=tp_side,
+                    amount=None,
+                    price=None,
+                    params={
+                        'stopPrice': tp_price,
+                        'closePosition': True
+                    },
+                    action=action
+                )
+                logger.info(f"🎯 TP real de posición colocado en Binance: {tp_price}")
             except Exception as tp_err:
                 logger.error(f"⚠️ Error al colocar TP en Binance para {symbol}: {tp_err}")
 

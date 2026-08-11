@@ -57,11 +57,18 @@ class MirageBinance:
             'options': {
                 'defaultType':             'future',
                 'adjustForTimeDifference': True,
+                'recvWindow':              60000,
+                'warnOnFetchOpenOrdersWithoutSymbol': False,
             }
         })
         self.client.set_sandbox_mode(False)
 
-        if self.paper_trading:
+        if not self.paper_trading:
+            try:
+                self.client.load_time_difference()
+            except Exception as e:
+                logger.warning(f"Sincronización inicial de tiempo con Binance: {e}")
+        else:
             logger.info(f"MODO PAPER TRADING | Balance simulado: {self._paper_balance} USDT")
 
     # ── GESTIÓN DE MARGEN SIMULADO ────────────────────────────────
@@ -69,8 +76,22 @@ class MirageBinance:
     def get_available_margin(self):
         """Devuelve el capital 'Cash' disponible para abrir nuevas posiciones."""
         if not self.paper_trading:
-            balance = self.client.fetch_balance()
-            return float(balance.get('USDT', {}).get('free', 0))
+            try:
+                balance = self.client.fetch_balance()
+                return float(balance.get('USDT', {}).get('free', 0))
+            except Exception as e:
+                err_str = str(e)
+                if "-1021" in err_str or "Timestamp" in err_str:
+                    logger.warning("⏱️ Desfase de reloj detectado con Binance (-1021). Re-sincronizando tiempo...")
+                    try:
+                        self.client.load_time_difference()
+                        balance = self.client.fetch_balance()
+                        return float(balance.get('USDT', {}).get('free', 0))
+                    except Exception as retry_err:
+                        logger.error(f"Error tras re-sincronización de tiempo: {retry_err}")
+                else:
+                    logger.error(f"Error obteniendo balance disponible de Binance: {e}")
+                return 0.0
         # En paper: Balance Total - Margen Ocupado
         return max(0, self._paper_balance - self._used_margin)
 
@@ -233,33 +254,51 @@ class MirageBinance:
 
     def get_open_positions(self, symbols=None):
         """
-        Devuelve un diccionario { 'XRPUSDT': {'contracts': 41.7, 'side': 'SHORT', ...} }
+        Devuelve un diccionario { 'ETHUSDT': {'contracts': 0.011, 'side': 'SHORT', 'sl': 1881.81, 'tp': 0.0, ...} }
         con las posiciones reales abiertas en Binance Futuros y sus TP/SL activos.
         """
         if self.paper_trading:
             return {}
         try:
+            self.client.options['warnOnFetchOpenOrdersWithoutSymbol'] = False
             raw_positions = self.client.fetch_positions(symbols)
+
+            open_orders_by_symbol = {}
+            try:
+                all_orders = self.client.fetch_open_orders()
+                for o in all_orders:
+                    raw_sym = o.get('symbol', '').replace('/', '').replace(':USDT', '')
+                    if raw_sym not in open_orders_by_symbol:
+                        open_orders_by_symbol[raw_sym] = []
+                    open_orders_by_symbol[raw_sym].append(o)
+            except Exception as order_err:
+                logger.warning(f"No se pudieron consultar órdenes abiertas globales: {order_err}")
+
             res = {}
             for p in raw_positions:
                 contracts = float(p.get('contracts', 0) or 0)
-                sym = p.get('symbol', '').replace('/', '')
+                clean_sym = p.get('symbol', '').replace('/', '').replace(':USDT', '')
                 if contracts > 0:
                     sl = 0.0
                     tp = 0.0
-                    try:
-                        orders = self.client.fetch_open_orders(sym)
-                        for o in orders:
-                            o_type = str(o.get('type', '')).upper()
-                            trigger_p = float(o.get('stopPrice', 0) or o.get('price', 0) or 0)
-                            if 'STOP' in o_type:
-                                sl = trigger_p
-                            elif 'TAKE_PROFIT' in o_type or 'LIMIT' in o_type:
-                                tp = trigger_p
-                    except Exception:
-                        pass
+                    orders = open_orders_by_symbol.get(clean_sym, [])
+                    for o in orders:
+                        info = o.get('info', {})
+                        o_type = str(info.get('origType') or info.get('type') or o.get('type') or '').upper()
+                        trigger_p = float(
+                            o.get('stopPrice') or
+                            o.get('triggerPrice') or
+                            o.get('price') or
+                            info.get('stopPrice') or
+                            info.get('triggerPrice') or
+                            0.0
+                        )
+                        if 'STOP' in o_type:
+                            sl = trigger_p
+                        elif 'TAKE_PROFIT' in o_type or 'LIMIT' in o_type:
+                            tp = trigger_p
 
-                    res[sym] = {
+                    res[clean_sym] = {
                         'contracts': contracts,
                         'side': str(p.get('side', '')).upper(),
                         'entry_price': float(p.get('entryPrice', 0) or 0),
