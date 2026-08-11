@@ -442,20 +442,45 @@ def main():
 
                     new_be = b["rm"].calculate_breakeven_stop(t, current_price)
                     if new_be is not None:
-                        logger.info(f"🛡️  {sym} Breakeven activado → SL={new_be}")
-                        t["sl"] = new_be
-                        t["is_breakeven"] = True
-                        t["use_sl"] = True
-                        t["is_trailing"] = False
+                        if paper_mode:
+                            logger.info(f"🛡️  {sym} Breakeven activado → SL={new_be}")
+                            t["sl"] = new_be
+                            t["is_breakeven"] = True
+                            t["use_sl"] = True
+                            t["is_trailing"] = False
+                        else:
+                            success = executor.update_position_stop_loss(
+                                api, sym, new_be, t["action"], t["size"]
+                            )
+                            if success:
+                                t["sl"] = new_be
+                                t["is_breakeven"] = True
+                                t["use_sl"] = True
+                                t["is_trailing"] = False
+                                logger.info(f"🔒 {sym} Breakeven SL sincronizado con Binance: {new_be}")
+                            else:
+                                logger.warning(f"⚠️ {sym} Breakeven SL NO sincronizado — Binance mantiene SL anterior")
 
                     new_sl = b["rm"].calculate_trailing_stop(
                         t, current_price, atr_current
                     )
                     if new_sl is not None and new_sl != t["sl"]:
-                        logger.info(f"{sym} trailing: {t['sl']} → {new_sl}")
-                        t["sl"] = new_sl
-                        t["use_sl"] = True
-                        t["is_trailing"] = True
+                        if paper_mode:
+                            logger.info(f"{sym} trailing: {t['sl']} → {new_sl}")
+                            t["sl"] = new_sl
+                            t["use_sl"] = True
+                            t["is_trailing"] = True
+                        else:
+                            success = executor.update_position_stop_loss(
+                                api, sym, new_sl, t["action"], t["size"]
+                            )
+                            if success:
+                                t["sl"] = new_sl
+                                t["use_sl"] = True
+                                t["is_trailing"] = True
+                                logger.info(f"🔄 {sym} Trailing SL sincronizado con Binance: {new_sl}")
+                            else:
+                                logger.warning(f"⚠️ {sym} Trailing SL NO sincronizado — Binance mantiene SL anterior")
 
                 trades_before = len(b["tr"].active_trades)
                 b["tr"].update_market_price(current_price, is_paper=paper_mode)
@@ -524,6 +549,21 @@ def main():
                                 if size > 0:
                                     margin_needed = (size * current_price) / config.LEVERAGE
                                     if margin_needed <= available_margin:
+                                        dca_order_id = 'PAPER'
+                                        if not paper_mode:
+                                            dca_result = executor.execute_trade(
+                                                client=api,
+                                                symbol=sym,
+                                                action=t_ref["action"],
+                                                size=size,
+                                                sl=t_ref["sl"],
+                                                tp=t_ref["tp"],
+                                                signal_price=current_price,
+                                            )
+                                            if not dca_result:
+                                                logger.error(f"❌ DCA falló en Binance para {sym}")
+                                                continue
+                                            dca_order_id = str(dca_result.get('id', 'OK'))
                                         api.occupy_margin(margin_needed)
                                         b["tr"].register_trade(
                                             t_ref["action"],
@@ -533,6 +573,8 @@ def main():
                                             t_ref["tp"],
                                             last_row,
                                             t_ref.get("use_sl", True),
+                                            method="DCA SCALE-IN",
+                                            order_id=dca_order_id,
                                         )
                             else:
                                 print(f"   ⏳ {sym} Nivel DCA alcanzado, esperando confirmación técnica...")
@@ -571,7 +613,7 @@ def main():
                             )
 
                             # ── Ejecución real en Binance ─────────────────────────────
-                            order = executor.execute_trade(
+                            result = executor.execute_trade(
                                 client=api,
                                 symbol=sym,
                                 action=action_str,
@@ -580,14 +622,18 @@ def main():
                                 tp=tp,
                                 signal_price=current_price,
                             )
-                            if order:
-                                real_order_id = str(order.get('id') or order.get('orderId') or 'OK') if isinstance(order, dict) else 'OK'
+                            if result:
+                                real_order_id = str(result.get('id', 'OK'))
+                                if not result.get('sl_placed') and use_sl and sl is not None:
+                                    logger.error(f"🚨 ENTRADA OK pero SL FALLÓ para {sym} — posición cerrada por seguridad")
+                                if not result.get('tp_placed') and tp is not None:
+                                    logger.warning(f"⚠️ ENTRADA OK pero TP FALLÓ para {sym}")
                                 b["tr"].register_trade(
                                     action_str,
                                     current_price,
                                     size,
-                                    sl,
-                                    tp,
+                                    result.get('sl_price', sl),
+                                    result.get('tp_price', tp),
                                     last_row,
                                     use_sl,
                                     method=method_name.upper() if method_name else "CONSENSO IA",

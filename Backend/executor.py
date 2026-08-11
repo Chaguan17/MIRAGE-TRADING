@@ -12,6 +12,9 @@ import notification_manager as nm
 
 logger = logging.getLogger(__name__)
 
+# Buffer de slippage para órdenes STOP limit — 0.1% para maximizar fill en mercados rápidos
+SL_LIMIT_BUFFER = 0.001
+
 
 def is_paper_trading(client):
     if client is not None and hasattr(client, 'paper_trading'):
@@ -76,7 +79,15 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None, signal_price=N
             f"Tipo: {order_type_str} | Tamaño: {size} | SL: {sl or 'Sin SL'} | TP: {tp or 'Sin TP'}",
             symbol
         )
-        return {"dry_run": True, "symbol": symbol, "side": side, "size": size}
+        return {
+            'order': {"dry_run": True, "symbol": symbol, "side": side, "size": size},
+            'id': 'PAPER',
+            'fill_price': None,
+            'sl_placed': True,
+            'tp_placed': True,
+            'sl_price': sl,
+            'tp_price': tp,
+        }
 
     try:
         order = None
@@ -151,51 +162,82 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None, signal_price=N
         import time
         time.sleep(0.2)
 
-        # Stop Loss en Binance Futures Real (Position-Level)
-        if sl is not None and sl > 0:
-            try:
-                sl_side = 'sell' if action == 'LONG' else 'buy'
-                sl_price = round(sl, sl_prec)
-                _safe_create_order(
-                    client=client,
-                    symbol=symbol,
-                    order_type='STOP_MARKET',
-                    side=sl_side,
-                    amount=None,
-                    price=None,
-                    params={
-                        'stopPrice': sl_price,
-                        'closePosition': True
-                    },
-                    action=action
-                )
-                logger.info(f"🛡️ SL real de posición colocado en Binance: {sl_price}")
-            except Exception as sl_err:
-                logger.error(f"⚠️ Error al colocar SL en Binance para {symbol}: {sl_err}")
+        sl_success = False
+        tp_success = False
+        sl_final = None
+        tp_final = None
 
-        # Take Profit en Binance Futures Real (Position-Level)
+        # Stop Loss LIMIT (Maker 0.020%) — Opción B: 3 intentos, si falla cierra posición
+        if sl is not None and sl > 0:
+            sl_side = 'sell' if action == 'LONG' else 'buy'
+            sl_trigger = round(sl, sl_prec)
+            if action == 'LONG':
+                sl_limit = round(sl_trigger * (1 - SL_LIMIT_BUFFER), sl_prec)
+            else:
+                sl_limit = round(sl_trigger * (1 + SL_LIMIT_BUFFER), sl_prec)
+
+            for attempt in range(3):
+                try:
+                    _safe_create_order(
+                        client=client, symbol=symbol,
+                        order_type='STOP', side=sl_side,
+                        amount=size, price=sl_limit,
+                        params={'stopPrice': sl_trigger},
+                        action=action
+                    )
+                    sl_success = True
+                    sl_final = sl_trigger
+                    logger.info(f"🛡️ SL Limit colocado: trigger={sl_trigger}, limit={sl_limit}")
+                    break
+                except Exception as sl_err:
+                    if attempt < 2:
+                        logger.warning(f"⚠️ SL intento {attempt+1}/3 falló: {sl_err} — reintentando en 500ms...")
+                        time.sleep(0.5)
+                    else:
+                        logger.error(f"🚨 SL FALLÓ tras 3 intentos para {symbol}: {sl_err}")
+
+            if not sl_success:
+                logger.error(f"🚨 SEGURIDAD: Cerrando posición {symbol} porque SL no se pudo colocar")
+                nm.add_notification(
+                    "ERROR",
+                    f"🚨 SL FALLÓ — Posición cerrada por seguridad ({symbol})",
+                    f"Se intentó colocar SL en {sl_trigger} pero falló 3 veces. Posición cerrada automáticamente.",
+                    symbol
+                )
+                try:
+                    close_position(client, symbol, action, size)
+                except Exception as close_err:
+                    logger.error(f"❌ Error cerrando posición de seguridad: {close_err}")
+                return None
+
+        # Take Profit LIMIT (Maker 0.020%)
         if tp is not None and tp > 0:
             try:
                 tp_side = 'sell' if action == 'LONG' else 'buy'
-                tp_price = round(tp, sl_prec)
+                tp_trigger = round(tp, sl_prec)
+                tp_limit = tp_trigger
                 _safe_create_order(
-                    client=client,
-                    symbol=symbol,
-                    order_type='TAKE_PROFIT_MARKET',
-                    side=tp_side,
-                    amount=None,
-                    price=None,
-                    params={
-                        'stopPrice': tp_price,
-                        'closePosition': True
-                    },
+                    client=client, symbol=symbol,
+                    order_type='TAKE_PROFIT', side=tp_side,
+                    amount=size, price=tp_limit,
+                    params={'stopPrice': tp_trigger},
                     action=action
                 )
-                logger.info(f"🎯 TP real de posición colocado en Binance: {tp_price}")
+                tp_success = True
+                tp_final = tp_trigger
+                logger.info(f"🎯 TP Limit colocado: trigger={tp_trigger}, limit={tp_limit}")
             except Exception as tp_err:
-                logger.error(f"⚠️ Error al colocar TP en Binance para {symbol}: {tp_err}")
+                logger.error(f"⚠️ Error al colocar TP Limit para {symbol}: {tp_err}")
 
-        return order
+        return {
+            'order': order,
+            'id': str(order.get('id') or order.get('orderId') or 'OK'),
+            'fill_price': actual_fill if actual_fill > 0 else None,
+            'sl_placed': sl_success,
+            'tp_placed': tp_success,
+            'sl_price': sl_final,
+            'tp_price': tp_final,
+        }
 
     except Exception as e:
         logger.error(f"❌ Error ejecutando orden REAL {side.upper()} en {symbol}: {e}")
@@ -285,4 +327,82 @@ def cancel_all_orders(client, symbol):
     except Exception as e:
         logger.error(f"❌ Error cancelando órdenes reales en {symbol}: {e}")
         nm.add_notification("ERROR", f"Error cancelando órdenes en Binance ({symbol})", str(e), symbol)
+        return False
+
+
+def update_position_stop_loss(client, symbol, new_sl_price, action, size, sl_prec=2):
+    """
+    Cancela el SL existente en Binance y coloca uno nuevo STOP Limit (Maker 0.020%).
+    Retorna True si exitoso, False si falló (SL anterior puede seguir vigente).
+    """
+    import time
+    try:
+        open_orders = client.client.fetch_open_orders(symbol)
+        sl_side = 'sell' if action == 'LONG' else 'buy'
+
+        # Buscar y cancelar órdenes SL existentes (STOP o STOP_MARKET)
+        for o in open_orders:
+            o_info = o.get('info', {})
+            orig_type = str(o_info.get('origType', '') or o_info.get('type', '') or o.get('type', '') or '').upper()
+            if 'STOP' in orig_type and 'TAKE' not in orig_type:
+                if str(o.get('side', '')).lower() == sl_side:
+                    client.client.cancel_order(o['id'], symbol)
+                    logger.info(f"🗑️ SL anterior cancelado: {o['id']}")
+
+        # Colocar nuevo SL LIMIT con buffer de slippage
+        sl_trigger = round(new_sl_price, sl_prec)
+        if action == 'LONG':
+            sl_limit = round(sl_trigger * (1 - SL_LIMIT_BUFFER), sl_prec)
+        else:
+            sl_limit = round(sl_trigger * (1 + SL_LIMIT_BUFFER), sl_prec)
+
+        _safe_create_order(
+            client=client, symbol=symbol,
+            order_type='STOP', side=sl_side,
+            amount=size, price=sl_limit,
+            params={'stopPrice': sl_trigger},
+            action=action
+        )
+        logger.info(f"🛡️ SL Limit actualizado en Binance: trigger={sl_trigger}, limit={sl_limit}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error actualizando SL en Binance para {symbol}: {e}")
+        return False
+
+
+def update_position_take_profit(client, symbol, new_tp_price, action, size, sl_prec=2):
+    """
+    Cancela el TP existente en Binance y coloca uno nuevo TAKE_PROFIT Limit (Maker 0.020%).
+    Retorna True si exitoso, False si falló.
+    """
+    try:
+        open_orders = client.client.fetch_open_orders(symbol)
+        tp_side = 'sell' if action == 'LONG' else 'buy'
+
+        # Buscar y cancelar órdenes TP existentes (TAKE_PROFIT o TAKE_PROFIT_MARKET)
+        for o in open_orders:
+            o_info = o.get('info', {})
+            orig_type = str(o_info.get('origType', '') or o_info.get('type', '') or o.get('type', '') or '').upper()
+            if 'TAKE_PROFIT' in orig_type:
+                if str(o.get('side', '')).lower() == tp_side:
+                    client.client.cancel_order(o['id'], symbol)
+                    logger.info(f"🗑️ TP anterior cancelado: {o['id']}")
+
+        # Colocar nuevo TP LIMIT
+        tp_trigger = round(new_tp_price, sl_prec)
+        tp_limit = tp_trigger
+
+        _safe_create_order(
+            client=client, symbol=symbol,
+            order_type='TAKE_PROFIT', side=tp_side,
+            amount=size, price=tp_limit,
+            params={'stopPrice': tp_trigger},
+            action=action
+        )
+        logger.info(f"🎯 TP Limit actualizado en Binance: trigger={tp_trigger}, limit={tp_limit}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Error actualizando TP en Binance para {symbol}: {e}")
         return False
