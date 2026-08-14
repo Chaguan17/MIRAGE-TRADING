@@ -38,6 +38,7 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
   const [loading, setLoading] = useState(true);
   const [lastPrice, setLastPrice] = useState(null);
   const [priceChange, setPriceChange] = useState(0);
+  const [wsStatus, setWsStatus] = useState('disconnected');
 
   // Keep selectedPair valid
   useEffect(() => {
@@ -135,13 +136,74 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
     if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
 
     let isMounted = true;
+    let reconnectTimer = null;
     setLoading(true);
 
     // Cleanup previous WS
     if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
       wsRef.current.close();
       wsRef.current = null;
     }
+
+    const connectWebSocket = () => {
+      if (!isMounted) return;
+
+      const wsSymbol = selectedPair.toLowerCase();
+      const ws = new WebSocket(`${chartWsUrl}/${wsSymbol}@kline_${selectedTF}`);
+
+      ws.onopen = () => {
+        if (!isMounted) return;
+        setWsStatus('connected');
+      };
+
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const msg = JSON.parse(event.data);
+          const k = msg.k;
+          if (!k) return;
+
+          const bar = {
+            time: Math.floor(k.t / 1000),
+            open: parseFloat(k.o),
+            high: parseFloat(k.h),
+            low: parseFloat(k.l),
+            close: parseFloat(k.c),
+          };
+          const vol = {
+            time: bar.time,
+            value: parseFloat(k.v),
+            color: bar.close >= bar.open ? 'rgba(0, 255, 170, 0.15)' : 'rgba(255, 59, 105, 0.15)',
+          };
+
+          candleSeriesRef.current?.update(bar);
+          volumeSeriesRef.current?.update(vol);
+
+          setLastPrice(bar.close);
+          if (lastBarRef.current) {
+            setPriceChange(((bar.close - lastBarRef.current.open) / lastBarRef.current.open) * 100);
+          }
+          lastBarRef.current = bar;
+        } catch (_) {}
+      };
+
+      ws.onerror = (err) => {
+        if (!isMounted) return;
+        setWsStatus('reconnecting');
+      };
+
+      ws.onclose = () => {
+        if (!isMounted) return;
+        setWsStatus('reconnecting');
+        reconnectTimer = setTimeout(() => {
+          if (isMounted) connectWebSocket();
+        }, 3000);
+      };
+
+      wsRef.current = ws;
+    };
 
     const fetchAndSubscribe = async () => {
       try {
@@ -186,46 +248,7 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
         }
 
         setLoading(false);
-
-        // Connect Binance WS for real-time updates
-        const wsSymbol = selectedPair.toLowerCase();
-        const ws = new WebSocket(`${chartWsUrl}/${wsSymbol}@kline_${selectedTF}`);
-
-        let msgReceived = false;
-
-        ws.onmessage = (event) => {
-          msgReceived = true;
-          if (!isMounted) return;
-          try {
-            const msg = JSON.parse(event.data);
-            const k = msg.k;
-            if (!k) return;
-
-            const bar = {
-              time: Math.floor(k.t / 1000),
-              open: parseFloat(k.o),
-              high: parseFloat(k.h),
-              low: parseFloat(k.l),
-              close: parseFloat(k.c),
-            };
-            const vol = {
-              time: bar.time,
-              value: parseFloat(k.v),
-              color: bar.close >= bar.open ? 'rgba(0, 255, 170, 0.15)' : 'rgba(255, 59, 105, 0.15)',
-            };
-
-            candleSeriesRef.current?.update(bar);
-            volumeSeriesRef.current?.update(vol);
-
-            setLastPrice(bar.close);
-            if (lastBarRef.current) {
-              setPriceChange(((bar.close - lastBarRef.current.open) / lastBarRef.current.open) * 100);
-            }
-            lastBarRef.current = bar;
-          } catch (_) {}
-        };
-
-        wsRef.current = ws;
+        connectWebSocket();
       } catch (err) {
         console.error("Chart fetch error:", err);
         if (isMounted) setLoading(false);
@@ -236,10 +259,14 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
 
     return () => {
       isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
         wsRef.current.close();
         wsRef.current = null;
       }
+      setWsStatus('disconnected');
     };
   }, [selectedPair, selectedTF, chartWsUrl]);
 
@@ -382,6 +409,23 @@ export default function TradingChart({ operaciones_activas, availablePairs, conf
         </div>
 
         <div style={headerRightStyle}>
+          {/* WebSocket Status Indicator */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '5px',
+            padding: '4px 8px', borderRadius: '6px', fontSize: '0.65rem', fontWeight: '700',
+            background: wsStatus === 'connected' ? 'rgba(0,255,170,0.06)' : wsStatus === 'reconnecting' ? 'rgba(245,158,11,0.08)' : 'rgba(255,59,105,0.08)',
+            color: wsStatus === 'connected' ? '#00ffaa' : wsStatus === 'reconnecting' ? '#f59e0b' : '#ff3b69',
+            border: `1px solid ${wsStatus === 'connected' ? 'rgba(0,255,170,0.2)' : wsStatus === 'reconnecting' ? 'rgba(245,158,11,0.2)' : 'rgba(255,59,105,0.2)'}`,
+            fontFamily: 'JetBrains Mono, monospace',
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: wsStatus === 'connected' ? '#00ffaa' : wsStatus === 'reconnecting' ? '#f59e0b' : '#ff3b69',
+              boxShadow: `0 0 6px ${wsStatus === 'connected' ? '#00ffaa' : wsStatus === 'reconnecting' ? '#f59e0b' : '#ff3b69'}`,
+            }} />
+            {wsStatus === 'connected' ? 'STREAM LIVE' : wsStatus === 'reconnecting' ? 'RECONECTANDO...' : 'DESCONECTADO'}
+          </div>
+
           {/* Active position indicator */}
           {activeOp && (
             <div style={{

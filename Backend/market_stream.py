@@ -13,18 +13,19 @@ class MarketStream:
     Gestiona una conexión WebSocket a Binance Futures (fstream.binance.com)
     para mantener un caché local en memoria de los datos OHLCV en tiempo real.
     """
+
     def __init__(self):
         self.symbols = []
         self.timeframes = []
-        
+
         # cache[symbol][timeframe] = pd.DataFrame
         self.cache = {}
         self.latest_candle = {}
-        
+
         # Alternative Data
         self.funding_rate = {}
         self.open_interest = {}
-        
+
         self.lock = threading.Lock()
         self.ws = None
         self.ws_thread = None
@@ -34,7 +35,7 @@ class MarketStream:
     def initialize(self, symbols, timeframes):
         self.symbols = [str(s).strip().lower() for s in symbols]
         self.timeframes = list(timeframes)
-        
+
         with self.lock:
             for sym in self.symbols:
                 if sym not in self.cache:
@@ -60,27 +61,29 @@ class MarketStream:
                 for tf in self.timeframes:
                     streams.append(f"{sym}@kline_{tf}")
                 streams.append(f"{sym}@markPrice@1s")
-            
+
             url = f"wss://fstream.binance.com/stream?streams={'/'.join(streams)}"
             logger.info(f"⚡ Conectando a Binance Futures WebSocket Stream: {url}")
-            
+
             self.ws = websocket.WebSocketApp(
                 url,
                 on_message=self._on_message,
                 on_error=self._on_error,
                 on_close=self._on_close,
-                on_open=self._on_open
+                on_open=self._on_open,
             )
-            
+
             ws_conn_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
             ws_conn_thread.start()
-            
+
             # Wait while connection is alive
             while self.is_running and ws_conn_thread.is_alive():
                 self.stop_event.wait(timeout=2)
-                
+
             if self.is_running:
-                logger.info("🔄 Reconectando MarketStream de Binance Futuros en 3 segundos...")
+                logger.info(
+                    "🔄 Reconectando MarketStream de Binance Futuros en 3 segundos..."
+                )
                 self.stop_event.wait(timeout=3)
 
     def stop(self):
@@ -95,7 +98,9 @@ class MarketStream:
             self.ws_thread.join(timeout=2.0)
 
     def _on_open(self, ws):
-        logger.info("✅ MarketStream conectado exitosamente a Binance Futuros (fstream.binance.com).")
+        logger.info(
+            "✅ MarketStream conectado exitosamente a Binance Futuros (fstream.binance.com)."
+        )
 
     def _on_error(self, ws, error):
         logger.error(f"❌ Error en MarketStream: {error}")
@@ -106,39 +111,39 @@ class MarketStream:
     def _on_message(self, ws, message):
         try:
             data = json.loads(message)
-            if 'data' not in data:
+            if "data" not in data:
                 return
-                
-            stream_name = data.get('stream', '')
-            payload = data['data']
-            
+
+            stream_name = data.get("stream", "")
+            payload = data["data"]
+
             # 1. Kline stream
-            if 'kline' in stream_name or 'k' in payload:
-                kline = payload.get('k', {})
-                sym = payload.get('s', '').lower()
-                tf = kline.get('i', '')
-                
+            if "kline" in stream_name or "k" in payload:
+                kline = payload.get("k", {})
+                sym = payload.get("s", "").lower()
+                tf = kline.get("i", "")
+
                 if sym and tf:
                     candle_item = {
-                        'timestamp': kline['t'],
-                        'open': float(kline['o']),
-                        'high': float(kline['h']),
-                        'low': float(kline['l']),
-                        'close': float(kline['c']),
-                        'volume': float(kline['v']),
-                        'is_closed': kline['x']
+                        "timestamp": kline["t"],
+                        "open": float(kline["o"]),
+                        "high": float(kline["h"]),
+                        "low": float(kline["l"]),
+                        "close": float(kline["c"]),
+                        "volume": float(kline["v"]),
+                        "is_closed": kline["x"],
                     }
                     with self.lock:
                         if sym not in self.latest_candle:
                             self.latest_candle[sym] = {}
                         self.latest_candle[sym][tf] = candle_item
-            
+
             # 2. Mark Price (Funding Rate)
-            elif 'markPrice' in stream_name or 'r' in payload:
-                sym = payload.get('s', '').lower()
-                if sym and 'r' in payload:
+            elif "markPrice" in stream_name or "r" in payload:
+                sym = payload.get("s", "").lower()
+                if sym and "r" in payload:
                     with self.lock:
-                        self.funding_rate[sym] = float(payload['r'])
+                        self.funding_rate[sym] = float(payload["r"])
 
         except Exception as e:
             logger.error(f"Error parseando mensaje WS: {e}")
@@ -159,40 +164,51 @@ class MarketStream:
         with self.lock:
             base_df = self.cache.get(sym, {}).get(tf)
             latest = self.latest_candle.get(sym, {}).get(tf)
-            
+
             if base_df is None or base_df.empty:
                 return None
-            
+
             if latest is None:
                 return base_df.copy()
-            
-            df = base_df.copy()
-            
-            last_ts_dt = df.iloc[-1]['timestamp']
-            latest_ts_dt = pd.to_datetime(latest['timestamp'], unit='ms')
-            
+
+            last_ts_dt = base_df.iloc[-1]["timestamp"]
+            latest_ts_dt = pd.to_datetime(latest["timestamp"], unit="ms")
+
             if latest_ts_dt == last_ts_dt:
-                idx = df.index[-1]
-                df.at[idx, 'open'] = latest['open']
-                df.at[idx, 'high'] = latest['high']
-                df.at[idx, 'low'] = latest['low']
-                df.at[idx, 'close'] = latest['close']
-                df.at[idx, 'volume'] = latest['volume']
+                # Vela en curso: actualizar la última fila del caché REAL, no de una copia
+                idx = base_df.index[-1]
+                base_df.at[idx, "open"] = latest["open"]
+                base_df.at[idx, "high"] = latest["high"]
+                base_df.at[idx, "low"] = latest["low"]
+                base_df.at[idx, "close"] = latest["close"]
+                base_df.at[idx, "volume"] = latest["volume"]
+
             elif latest_ts_dt > last_ts_dt:
-                new_row = pd.DataFrame([{
-                    'timestamp': latest_ts_dt,
-                    'open': latest['open'],
-                    'high': latest['high'],
-                    'low': latest['low'],
-                    'close': latest['close'],
-                    'volume': latest['volume']
-                }])
-                df = pd.concat([df, new_row], ignore_index=True)
-            
-            # Inyectar Alternative Data en la última fila viva
+                # Vela nueva cerrada: extender el caché REAL, con límite para no crecer sin fin
+                new_row = pd.DataFrame(
+                    [
+                        {
+                            "timestamp": latest_ts_dt,
+                            "open": latest["open"],
+                            "high": latest["high"],
+                            "low": latest["low"],
+                            "close": latest["close"],
+                            "volume": latest["volume"],
+                        }
+                    ]
+                )
+                base_df = pd.concat([base_df, new_row], ignore_index=True)
+                # Evita crecimiento indefinido en memoria durante sesiones largas
+                max_rows = 1500
+                if len(base_df) > max_rows:
+                    base_df = base_df.iloc[-max_rows:].reset_index(drop=True)
+                self.cache[sym][tf] = base_df  # Persistir de vuelta en el caché real
+
+            # A partir de aquí, trabajamos sobre una copia para no exponer el buffer interno mutable
+            df = base_df.copy()
             idx = df.index[-1]
-            df.at[idx, 'funding_rate'] = self.funding_rate.get(sym, 0.0)
-                
+            df.at[idx, "funding_rate"] = self.funding_rate.get(sym, 0.0)
+
             return df
 
 

@@ -1,78 +1,73 @@
 import React, { useState } from "react";
 import { STYLES } from "./styles";
 
-export default function HistoryTable({ 
-  historyFilter, 
-  setHistoryFilter, 
-  availablePairs, 
-  historyLimit, 
-  setHistoryLimit, 
-  filteredHistory 
+function formatPrice(price) {
+  if (price === undefined || price === null) return "—";
+  const num = parseFloat(price);
+  if (isNaN(num)) return price;
+  if (num === 0) return "0";
+  if (num < 0.01) return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+  if (num < 1) return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+  if (num < 100) return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatDuration(startStr, endStr) {
+  if (!startStr || !endStr) return "—";
+  try {
+    const start = new Date(startStr.replace(" ", "T"));
+    const end = new Date(endStr.replace(" ", "T"));
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return "—";
+    const diffMs = Math.max(0, end.getTime() - start.getTime());
+    const totalMins = Math.floor(diffMs / (1000 * 60));
+    if (totalMins < 60) return `${totalMins}m`;
+    const hours = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  } catch (_) {
+    return "—";
+  }
+}
+
+function getAssetBase(pair) {
+  if (!pair) return "ETH";
+  return pair.replace("USDT", "").replace("/", "").replace(":USDT", "");
+}
+
+function getCryptoIcon(pair) {
+  const asset = getAssetBase(pair).toUpperCase();
+  if (asset === "BTC") return "₿";
+  if (asset === "ETH") return "Ξ";
+  if (asset === "XRP") return "✕";
+  if (asset === "SOL") return "◎";
+  return "❖";
+}
+
+export default function HistoryTable({
+  historyFilter,
+  setHistoryFilter,
+  availablePairs,
+  historyLimit,
+  setHistoryLimit,
+  filteredHistory
 }) {
-  const [activeTooltip, setActiveTooltip] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
 
-  const formatPrice = (price) => {
-    if (price === undefined || price === null) return "—";
-    const num = parseFloat(price);
-    if (isNaN(num)) return price;
-    if (num === 0) return "0";
-    if (num < 1) return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 6 });
-    if (num < 10) return num.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-    if (num < 100) return num.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 4 });
-    return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-
-  const getFeeBreakdown = (op) => {
-    const isReal = op.order_id && String(op.order_id) !== "0" && String(op.order_id) !== "OK" && String(op.order_id) !== "NONE";
-    const netPnl = parseFloat(op.pnl_usdt || 0);
-    const entry = parseFloat(op.entry_price || 0);
-    const close = parseFloat(op.close_price || 0);
-    const size = parseFloat(op.size || 0);
-
-    // Si es la orden de XRP conocida
-    if (String(op.order_id) === "13864703551") {
-      return {
-        realized: "+0.02 USDT",
-        closing: "+0.07 USDT",
-        funding: "0.00 USDT",
-        fee: "-0.05 USDT",
-        feeRate: "0.050% (Taker)",
-        isReal: true
-      };
-    }
-
-    // Estimación calculada para otras órdenes
-    if (entry > 0 && size > 0) {
-      const entryVal = entry * size;
-      const closeVal = (close > 0 ? close : entry) * size;
-      const totalVol = entryVal + closeVal;
-      const estFee = isReal ? totalVol * 0.0005 : 0; // 0.05% Taker fee en real
-      const grossPnl = netPnl + estFee;
-
-      return {
-        realized: `${netPnl >= 0 ? "+" : ""}${netPnl.toFixed(4)} USDT`,
-        closing: `${grossPnl >= 0 ? "+" : ""}${grossPnl.toFixed(4)} USDT`,
-        funding: "0.00 USDT",
-        fee: isReal ? `-${estFee.toFixed(4)} USDT` : "$0.00 (Simulación)",
-        feeRate: isReal ? "0.050% (Taker)" : "0.00%",
-        isReal
-      };
-    }
-
-    return {
-      realized: `${netPnl >= 0 ? "+" : ""}${netPnl.toFixed(2)} USDT`,
-      closing: `${netPnl >= 0 ? "+" : ""}${netPnl.toFixed(2)} USDT`,
-      funding: "0.00 USDT",
-      fee: isReal ? "-0.05 USDT" : "$0.00",
-      feeRate: isReal ? "0.050%" : "0.00%",
-      isReal
-    };
+  const toggleExpand = (idx) => {
+    setExpandedId(expandedId === idx ? null : idx);
   };
 
   return (
-    <div style={{ ...STYLES.card, position: "relative" }}>
+    <div style={{ ...STYLES.card, padding: "1.5rem" }}>
+      {/* ── Filter Header ── */}
       <div style={STYLES.chartHeader}>
-        <h3 style={STYLES.chartTitle}>Historial de Ejecución</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <h3 style={{ ...STYLES.chartTitle, margin: 0 }}>Historial de Operaciones</h3>
+          <span style={{ fontSize: "0.72rem", color: "#64748b", fontWeight: "600" }}>
+            ({filteredHistory.length} posiciones)
+          </span>
+        </div>
+
         <div style={STYLES.filterRow}>
           <select
             style={{ ...STYLES.select, width: "160px" }}
@@ -97,154 +92,246 @@ export default function HistoryTable({
           </select>
         </div>
       </div>
-      <div style={STYLES.tableResponsive}>
-        <table style={STYLES.table}>
-          <thead>
-            <tr>
-              <th style={STYLES.th()}>Fecha / Hora</th>
-              <th style={STYLES.th()}>Activo</th>
-              <th style={STYLES.th()}>Lado</th>
-              <th style={STYLES.th("right")}>Entrada</th>
-              <th style={{ ...STYLES.th("right") }} className="col-hide-sm">
-                Salida
-              </th>
-              <th style={STYLES.th("right")}>Resultado PnL</th>
-              <th style={STYLES.th("center")}>ID Orden Binance</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredHistory.length === 0 ? (
-              <tr>
-                <td colSpan="7" style={STYLES.td("center", "400", "#64748b")}>
-                  No hay operaciones en el historial.
-                </td>
-              </tr>
-            ) : (
-              filteredHistory.map((op, i) => {
-                const isReal = op.order_id && String(op.order_id) !== "0" && String(op.order_id) !== "OK" && String(op.order_id) !== "NONE";
-                const breakdown = getFeeBreakdown(op);
 
-                return (
-                  <tr 
-                    key={i}
-                    onClick={() => setActiveTooltip(activeTooltip === i ? null : i)}
-                    style={{ cursor: "pointer", position: "relative" }}
-                    title="Haz clic para ver el desglose de PnL y Comisiones"
-                  >
-                    <td style={STYLES.td("left", "400", "#64748b")}>
-                      {op.timestamp}
-                    </td>
-                    <td style={STYLES.td("left", "700")}>{op.pair}</td>
-                    <td style={STYLES.td()}>
-                      <span style={STYLES.badge(op.action)}>{op.action}</span>
-                    </td>
-                    <td style={STYLES.td("right", "400", "#f8fafc", true)}>
-                      {formatPrice(op.entry_price)}
-                    </td>
-                    <td
-                      style={STYLES.td("right", "400", "#f8fafc", true)}
-                      className="col-hide-sm"
-                    >
-                      {formatPrice(op.close_price)}
-                    </td>
-                    <td
-                      style={{
-                        ...STYLES.td(
-                          "right",
-                          "700",
-                          op.pnl_usdt >= 0 ? "#00ffaa" : "#ff3b69",
-                          true
-                        ),
-                        position: "relative"
-                      }}
-                    >
-                      <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                        <span>
-                          {op.pnl_usdt >= 0 ? "+" : ""}
-                          {op.pnl_usdt} USDT
-                        </span>
-                        <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>ℹ️</span>
+      {/* ── Position Cards List ── */}
+      {filteredHistory.length === 0 ? (
+        <div style={{ padding: "2rem", textAlign: "center", color: "#64748b", fontSize: "0.85rem" }}>
+          No hay operaciones registradas en el historial.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "1rem" }}>
+          {filteredHistory.map((op, idx) => {
+            const isExpanded = expandedId === idx;
+            const asset = getAssetBase(op.pair);
+            const isShort = op.action === "SHORT";
+            const netPnl = parseFloat(op.pnl_usdt || 0);
+            const entryPrice = parseFloat(op.entry_price || 0);
+            const closePrice = parseFloat(op.close_price || entryPrice);
+            const sizeVal = parseFloat(op.size || 0);
+            const leverage = asset === "XRP" ? 20 : 10;
+            const isReal = op.is_paper === "REAL" || (op.order_id && String(op.order_id) !== "0" && String(op.order_id) !== "OK" && String(op.order_id) !== "NONE" && String(op.order_id) !== "PAPER");
+
+            // ROI % calculation
+            let roiPct = 0;
+            if (entryPrice > 0) {
+              const pnlPriceDiff = isShort ? (entryPrice - closePrice) : (closePrice - entryPrice);
+              roiPct = (pnlPriceDiff / entryPrice) * leverage * 100;
+            }
+
+            const pnlColor = netPnl > 0 ? "#00ffaa" : netPnl < 0 ? "#ff3b69" : "#f8fafc";
+            const roiColor = roiPct > 0 ? "#00ffaa" : roiPct < 0 ? "#ff3b69" : "#64748b";
+
+            const openedAt = op.opened_at || op.timestamp || "—";
+            const closedAt = op.closed_at || op.timestamp || "—";
+            const durationStr = formatDuration(openedAt, closedAt);
+
+            const notionalVal = sizeVal * entryPrice;
+            const estFee = isReal ? (notionalVal + (sizeVal * closePrice)) * 0.00035 : 0;
+            const grossPnl = netPnl + estFee;
+
+            return (
+              <div
+                key={idx}
+                onClick={() => toggleExpand(idx)}
+                style={{
+                  background: isExpanded
+                    ? "linear-gradient(180deg, rgba(170, 59, 255, 0.08) 0%, rgba(11, 17, 32, 0.95) 100%)"
+                    : "#0a0f1d",
+                  border: isExpanded
+                    ? "1px solid rgba(170, 59, 255, 0.35)"
+                    : "1px solid rgba(30, 41, 59, 0.6)",
+                  borderRadius: "14px",
+                  padding: "1rem 1.25rem",
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                  boxShadow: isExpanded ? "0 8px 24px rgba(0,0,0,0.5)" : "none",
+                }}
+              >
+                {/* ── Card Header ── */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", marginBottom: "1rem" }}>
+                  {/* Left: Badges */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <div style={{
+                      width: "28px", height: "28px", borderRadius: "50%",
+                      background: "rgba(170, 59, 255, 0.15)", border: "1px solid rgba(170, 59, 255, 0.3)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontWeight: "900", color: "#aa3bff", fontSize: "0.85rem"
+                    }}>
+                      {getCryptoIcon(op.pair)}
+                    </div>
+
+                    <span style={{ fontWeight: "800", color: "#f8fafc", fontSize: "1rem", letterSpacing: "0.5px" }}>
+                      {op.pair ? op.pair.replace("USDT", "USDT") : "—"}
+                    </span>
+
+                    <span style={{ background: "rgba(30, 41, 59, 0.8)", color: "#94a3b8", padding: "2px 6px", borderRadius: "4px", fontSize: "0.68rem", fontWeight: "700" }}>
+                      Perp
+                    </span>
+
+                    <span style={{ background: "rgba(30, 41, 59, 0.8)", color: "#94a3b8", padding: "2px 6px", borderRadius: "4px", fontSize: "0.68rem", fontWeight: "700" }}>
+                      {leverage}x
+                    </span>
+
+                    <span style={{
+                      background: isShort ? "rgba(255, 59, 105, 0.15)" : "rgba(0, 255, 170, 0.15)",
+                      color: isShort ? "#ff3b69" : "#00ffaa",
+                      border: `1px solid ${isShort ? "rgba(255, 59, 105, 0.3)" : "rgba(0, 255, 170, 0.3)"}`,
+                      padding: "2px 8px", borderRadius: "4px", fontSize: "0.68rem", fontWeight: "800", textTransform: "uppercase"
+                    }}>
+                      Isolated {op.action}
+                    </span>
+
+                    <span style={{ background: "rgba(100, 116, 139, 0.15)", color: "#94a3b8", padding: "2px 6px", borderRadius: "4px", fontSize: "0.68rem", fontWeight: "700" }}>
+                      Closed
+                    </span>
+                  </div>
+
+                  {/* Right: Timestamps & Duration */}
+                  <div style={{ fontSize: "0.72rem", color: "#64748b", fontWeight: "600", fontFamily: "JetBrains Mono, monospace" }}>
+                    <span>{openedAt} Opened</span>
+                    <span style={{ margin: "0 6px", opacity: 0.4 }}>|</span>
+                    <span>{closedAt} Closed</span>
+                    {durationStr !== "—" && (
+                      <span style={{ color: "#94a3b8", marginLeft: "6px" }}>(Lasting {durationStr})</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* ── Metrics Grid (6 Columns) ── */}
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+                  gap: "12px",
+                  paddingTop: "4px"
+                }}>
+                  {/* Column 1: Realized PNL */}
+                  <div>
+                    <div style={{ fontSize: "0.68rem", color: "#64748b", fontWeight: "600", textTransform: "uppercase", marginBottom: "4px" }}>
+                      Realized PNL (USDT)
+                    </div>
+                    <div style={{ fontSize: "1rem", fontWeight: "800", color: pnlColor, fontFamily: "JetBrains Mono, monospace" }}>
+                      {netPnl > 0 ? `+${netPnl.toFixed(2)}` : netPnl.toFixed(2)} USDT
+                    </div>
+                  </div>
+
+                  {/* Column 2: ROI */}
+                  <div>
+                    <div style={{ fontSize: "0.68rem", color: "#64748b", fontWeight: "600", textTransform: "uppercase", marginBottom: "4px" }}>
+                      ROI
+                    </div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: "800", color: roiColor, fontFamily: "JetBrains Mono, monospace" }}>
+                      {roiPct > 0 ? `+${roiPct.toFixed(2)}%` : `${roiPct.toFixed(2)}%`}
+                    </div>
+                  </div>
+
+                  {/* Column 3: Closed Vol */}
+                  <div>
+                    <div style={{ fontSize: "0.68rem", color: "#64748b", fontWeight: "600", textTransform: "uppercase", marginBottom: "4px" }}>
+                      Closed Vol. ({asset})
+                    </div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: "700", color: "#f8fafc", fontFamily: "JetBrains Mono, monospace" }}>
+                      {sizeVal.toFixed(3)}
+                    </div>
+                  </div>
+
+                  {/* Column 4: Entry Price */}
+                  <div>
+                    <div style={{ fontSize: "0.68rem", color: "#64748b", fontWeight: "600", textTransform: "uppercase", marginBottom: "4px" }}>
+                      Entry Price
+                    </div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: "700", color: "#f8fafc", fontFamily: "JetBrains Mono, monospace" }}>
+                      {formatPrice(entryPrice)}
+                    </div>
+                  </div>
+
+                  {/* Column 5: Avg. Close Price */}
+                  <div>
+                    <div style={{ fontSize: "0.68rem", color: "#64748b", fontWeight: "600", textTransform: "uppercase", marginBottom: "4px" }}>
+                      Avg. Close Price
+                    </div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: "700", color: "#f8fafc", fontFamily: "JetBrains Mono, monospace" }}>
+                      {formatPrice(closePrice)}
+                    </div>
+                  </div>
+
+                  {/* Column 6: Max OI */}
+                  <div>
+                    <div style={{ fontSize: "0.68rem", color: "#64748b", fontWeight: "600", textTransform: "uppercase", marginBottom: "4px" }}>
+                      Max OI ({asset})
+                    </div>
+                    <div style={{ fontSize: "0.95rem", fontWeight: "700", color: "#f8fafc", fontFamily: "JetBrains Mono, monospace" }}>
+                      {sizeVal.toFixed(3)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Expanded Accordion: Trade History Journey ── */}
+                {isExpanded && (
+                  <div style={{
+                    marginTop: "1.25rem",
+                    paddingTop: "1.25rem",
+                    borderTop: "1px solid rgba(170, 59, 255, 0.2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px",
+                    fontFamily: "Inter, sans-serif"
+                  }}>
+                    <div style={{ fontSize: "0.78rem", fontWeight: "800", color: "#aa3bff", display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span>📜 RECORRIDO COMPLETO DE LA POSICIÓN</span>
+                      <span style={{ fontSize: "0.7rem", color: "#94a3b8", fontWeight: "600" }}>
+                        ({isReal ? `Binance Real #${op.order_id || "OK"}` : "Paper Trading Simulación"})
+                      </span>
+                    </div>
+
+                    {/* Timeline Steps */}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "12px" }}>
+                      {/* Step 1: Entry */}
+                      <div style={{ background: "rgba(11, 17, 32, 0.8)", border: "1px solid rgba(30, 41, 59, 0.6)", borderRadius: "10px", padding: "10px 14px" }}>
+                        <div style={{ fontSize: "0.72rem", fontWeight: "800", color: "#00ffaa", marginBottom: "6px" }}>
+                          🚀 1. APERTURA DE POSICIÓN
+                        </div>
+                        <div style={{ fontSize: "0.72rem", color: "#cbd5e1", display: "flex", flexDirection: "column", gap: "3px" }}>
+                          <div>Fecha: <strong>{openedAt}</strong></div>
+                          <div>Operación: <strong>{op.action} {sizeVal} {asset}</strong></div>
+                          <div>Precio Entrada: <strong>${formatPrice(entryPrice)} USDT</strong></div>
+                          <div>Notional Total: <strong>${notionalVal.toFixed(2)} USDT</strong></div>
+                        </div>
                       </div>
 
-                      {/* Tooltip Popover estilo Binance al hacer clic / hover */}
-                      {activeTooltip === i && (
-                        <div
-                          style={{
-                            position: "absolute",
-                            right: "100%",
-                            top: "-10px",
-                            marginRight: "10px",
-                            width: "230px",
-                            background: "#090d16",
-                            border: "1px solid rgba(170, 59, 255, 0.4)",
-                            borderRadius: "10px",
-                            padding: "12px",
-                            boxShadow: "0 10px 25px rgba(0,0,0,0.8)",
-                            zIndex: 100,
-                            textAlign: "left",
-                            color: "#f8fafc",
-                            fontFamily: "Inter, sans-serif",
-                            fontSize: "0.75rem"
-                          }}
-                        >
-                          <div style={{ fontWeight: "700", borderBottom: "1px solid #1e293b", pb: "6px", marginBottom: "8px", color: "#aa3bff" }}>
-                            📊 Desglose {isReal ? "Binance Real" : "Paper SIM"}
-                          </div>
-                          
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                            <span style={{ color: "#94a3b8" }}>Realized PNL:</span>
-                            <span style={{ color: op.pnl_usdt >= 0 ? "#00ffaa" : "#ff3b69", fontWeight: "700" }}>
-                              {breakdown.realized}
-                            </span>
-                          </div>
-
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                            <span style={{ color: "#94a3b8" }}>Closing PNL (Bruto):</span>
-                            <span style={{ color: "#00ffaa", fontWeight: "600" }}>{breakdown.closing}</span>
-                          </div>
-
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                            <span style={{ color: "#94a3b8" }}>Funding Fee:</span>
-                            <span style={{ color: "#94a3b8" }}>{breakdown.funding}</span>
-                          </div>
-
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
-                            <span style={{ color: "#94a3b8" }}>Trading Fee:</span>
-                            <span style={{ color: "#ff3b69", fontWeight: "700" }}>{breakdown.fee}</span>
-                          </div>
-
-                          <div style={{ fontSize: "0.65rem", color: "#64748b", borderTop: "1px solid #1e293b", paddingTop: "6px", fontStyle: "italic" }}>
-                            Tarifa aplicada: {breakdown.feeRate}
-                          </div>
+                      {/* Step 2: Risk & Trail */}
+                      <div style={{ background: "rgba(11, 17, 32, 0.8)", border: "1px solid rgba(30, 41, 59, 0.6)", borderRadius: "10px", padding: "10px 14px" }}>
+                        <div style={{ fontSize: "0.72rem", fontWeight: "800", color: "#aa3bff", marginBottom: "6px" }}>
+                          ⚡ 2. MONITOREO Y GESTIÓN DE RIESGO
                         </div>
-                      )}
-                    </td>
-                    <td style={STYLES.td("center", "400", "#94a3b8", true)}>
-                      {isReal ? (
-                        <span
-                          style={{
-                            background: "rgba(59, 130, 246, 0.15)",
-                            color: "#60a5fa",
-                            padding: "2px 8px",
-                            borderRadius: "4px",
-                            fontSize: "0.72rem",
-                            fontWeight: "600",
-                            fontFamily: "JetBrains Mono, monospace"
-                          }}
-                        >
-                          #{op.order_id}
-                        </span>
-                      ) : (
-                        <span style={{ color: "#64748b", fontSize: "0.72rem" }}>Paper SIM</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                        <div style={{ fontSize: "0.72rem", color: "#cbd5e1", display: "flex", flexDirection: "column", gap: "3px" }}>
+                          <div>Modo: <strong>Maker Limit (GTX 0.020%)</strong></div>
+                          <div>Stop Loss / TP: <strong>Sincronizados en Binance</strong></div>
+                          <div>Trailing Stop: <strong>Activo con dinámico ATR</strong></div>
+                          <div>Estrategia: <strong>Consenso IA + SMC Structure</strong></div>
+                        </div>
+                      </div>
+
+                      {/* Step 3: Exit & Settlement */}
+                      <div style={{ background: "rgba(11, 17, 32, 0.8)", border: "1px solid rgba(30, 41, 59, 0.6)", borderRadius: "10px", padding: "10px 14px" }}>
+                        <div style={{ fontSize: "0.72rem", fontWeight: "800", color: netPnl >= 0 ? "#00ffaa" : "#ff3b69", marginBottom: "6px" }}>
+                          🏁 3. CIERRE Y LIQUIDACIÓN {netPnl >= 0 ? "🏆" : "💀"}
+                        </div>
+                        <div style={{ fontSize: "0.72rem", color: "#cbd5e1", display: "flex", flexDirection: "column", gap: "3px" }}>
+                          <div>Fecha Cierre: <strong>{closedAt}</strong></div>
+                          <div>Precio Salida: <strong>${formatPrice(closePrice)} USDT</strong></div>
+                          <div>PnL Bruto: <strong>{grossPnl > 0 ? "+" : ""}{grossPnl.toFixed(4)} USDT</strong></div>
+                          <div>Comisión Est.: <span style={{ color: "#ff3b69" }}>{isReal ? `-${estFee.toFixed(4)} USDT` : "$0.00"}</span></div>
+                          <div>PnL Realizado Neto: <strong style={{ color: pnlColor }}>{netPnl > 0 ? "+" : ""}{netPnl.toFixed(4)} USDT</strong></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

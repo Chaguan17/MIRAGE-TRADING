@@ -254,23 +254,52 @@ def _fetch_dashboard_data():
 					# Auto-sincronizar el historial de ejecuciones reales de Binance a la BD SQLite
 					try:
 						conn_sync = sqlite3.connect(cfg.DB_PATH, timeout=5.0)
+						# Limpiar registros antiguos corruptos con pnl 0 de ejecuciones de entrada
+						conn_sync.execute("DELETE FROM trades WHERE is_paper = 'REAL' AND pnl_usdt = 0.0")
 						for sym in ['ETH/USDT:USDT', 'BTC/USDT:USDT', 'XRP/USDT:USDT']:
 							clean_sym = sym.replace(':USDT', '').replace('/', '')
-							trades_from_binance = real_client.client.fetch_my_trades(sym, limit=20)
+							trades_from_binance = real_client.client.fetch_my_trades(sym, limit=50)
 							for t in trades_from_binance:
+								info = t.get('info', {})
+								rpnl = float(info.get('realizedPnl') or t.get('realizedPnl') or 0.0)
+								# Solo procesar órdenes de CIERRE de posición (que generan PnL realizado)
+								if abs(rpnl) <= 1e-6:
+									continue
+
 								oid = str(t.get('order') or t.get('id') or '')
 								if not oid:
 									continue
-								dt_str = str(t.get('datetime', '')).replace('T', ' ').replace('.000Z', '').replace('Z', '')[:19]
-								side = 'LONG' if t.get('side') == 'buy' else 'SHORT'
-								price = float(t.get('price', 0))
+
+								closed_dt = str(t.get('datetime', '')).replace('T', ' ').replace('.000Z', '').replace('Z', '')[:19]
+								t_ts = t.get('timestamp', 0)
+								open_fills = [tr for tr in trades_from_binance if tr.get('timestamp', 0) < t_ts and abs(float(tr.get('info',{}).get('realizedPnl', 0))) <= 1e-6]
+								opened_dt = open_fills[-1].get('datetime', '').replace('T', ' ').replace('.000Z', '').replace('Z', '')[:19] if open_fills else closed_dt
+
+								fill_side = t.get('side', '').lower()
+								action = 'SHORT' if fill_side == 'buy' else 'LONG'
+								close_p = float(t.get('price', 0))
 								amount = float(t.get('amount', 0))
+
+								if amount <= 0:
+									continue
+
+								# Calcular precio de entrada implícito a partir del PnL realizado
+								if action == 'SHORT':
+									entry_p = close_p + (rpnl / amount)
+								else:
+									entry_p = close_p - (rpnl / amount)
+
+								entry_p = round(max(0.0001, entry_p), 4)
+								close_p = round(close_p, 4)
+								rpnl_rounded = round(rpnl, 4)
+								res_str = 'WIN' if rpnl >= 0 else 'LOSS'
+
 								c = conn_sync.execute('SELECT COUNT(*) FROM trades WHERE order_id = ?', (oid,))
 								if c.fetchone()[0] == 0:
 									conn_sync.execute(
-										'INSERT INTO trades (timestamp, pair, action, entry_price, close_price, size, result, pnl_usdt, order_id, is_paper) '
-										'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-										(dt_str, clean_sym, side, price, price, amount, 'WIN', 0.0, oid, 'REAL')
+										'INSERT INTO trades (timestamp, pair, action, entry_price, close_price, size, result, pnl_usdt, order_id, is_paper, opened_at, closed_at) '
+										'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+										(closed_dt, clean_sym, action, entry_p, close_p, amount, res_str, rpnl_rounded, oid, 'REAL', opened_dt, closed_dt)
 									)
 						conn_sync.commit()
 						conn_sync.close()
