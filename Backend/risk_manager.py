@@ -76,6 +76,29 @@ class RiskManager:
         )
         return self._current_risk
 
+    def is_kill_switch_triggered(self, current_balance: float) -> bool:
+        """
+        Verifica si el Drawdown total del capital ha superado el límite de parada de emergencia.
+        (Ej: caída > 15% respecto al pico histórico o balance inicial).
+        """
+        if current_balance <= 0:
+            return True
+
+        max_dd_limit = getattr(config, 'MAX_DRAWDOWN_HALT_PCT', 0.15)
+        # Comparar contra pico histórico y balance inicial
+        ref_equity = max(self._high_water_mark, self._initial_balance)
+        if ref_equity <= 0:
+            return False
+
+        drawdown_pct = (ref_equity - current_balance) / ref_equity
+        if drawdown_pct >= max_dd_limit:
+            logger.critical(
+                f"🚨 KILL SWITCH ACTIVADO: Drawdown del {drawdown_pct:.2%} superó el máximo permitido ({max_dd_limit:.2%}) "
+                f"| Equity actual: ${current_balance:.2f} | Pico: ${ref_equity:.2f}"
+            )
+            return True
+        return False
+
     # ─── Registro de resultados ──────────────────────────────────────────────
 
     def register_result(self, result: str):
@@ -162,22 +185,28 @@ class RiskManager:
         # Determinar precisiones y nocional mínimo según el símbolo en Binance Futuros
         import math
         sym_upper = str(symbol or "ETHUSDT").upper()
-        if "BTC" in sym_upper:
-            min_required_notional = 52.5
-            step = 0.001
-            prec = 3
-        elif "ETH" in sym_upper:
-            min_required_notional = 22.5
-            step = 0.001
-            prec = 3
-        elif "XRP" in sym_upper:
-            min_required_notional = 22.5
-            step = 1.0
-            prec = 0
-        else:
-            min_required_notional = max(float(getattr(config, 'MIN_SIZE_USDT', 5.0) or 5.0), 22.5)
-            step = 0.01
-            prec = 2
+        
+        default_min_notional = max(float(getattr(config, 'MIN_SIZE_USDT', 5.0) or 5.0), 22.5)
+        symbol_rules = {
+            "BTC":  {"min": 52.5, "step": 0.001, "prec": 3},
+            "ETH":  {"min": 22.5, "step": 0.001, "prec": 3},
+            "XRP":  {"min": 22.5, "step": 1.0,   "prec": 0},
+            "DOGE": {"min": 5.0,  "step": 1.0,   "prec": 0},
+            "SOL":  {"min": 5.0,  "step": 0.1,   "prec": 1},
+            "ADA":  {"min": 5.0,  "step": 1.0,   "prec": 0},
+            "HBAR": {"min": 5.0,  "step": 1.0,   "prec": 0},
+        }
+
+        min_required_notional = default_min_notional
+        step = 0.01
+        prec = 2
+        
+        for k, rules in symbol_rules.items():
+            if k in sym_upper:
+                min_required_notional = rules.get("min", default_min_notional)
+                step = rules["step"]
+                prec = rules["prec"]
+                break
 
         current_notional = size * entry_price
         if current_notional > max_notional_per_bullet:
@@ -296,8 +325,8 @@ class RiskManager:
         atr_value: float,
         action: str,
     ) -> list[float]:
-        mult1 = getattr(config, 'DCA_ATR_MULT_1', 1.5)
-        mult2 = getattr(config, 'DCA_ATR_MULT_2', 3.0)
+        mult1 = config.DCA_ATR_MULT_1
+        mult2 = config.DCA_ATR_MULT_2
 
         # Piso de seguridad: Garantiza que la distancia mínima sea al menos 0.8% para DCA 1 y 1.5% para DCA 2
         # Esto evita re-compras prematuras en oscilaciones de $0.50 o ruido menor.

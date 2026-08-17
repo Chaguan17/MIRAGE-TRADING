@@ -13,7 +13,8 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ── Rutas ────────────────────────────────────────────────────────────────────
-STORAGE_DIR      = "storage"
+BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
+STORAGE_DIR      = os.path.join(BASE_DIR, "storage")
 SETTINGS_PATH    = os.path.join(STORAGE_DIR, "settings.json")
 METADATA_PATH    = os.path.join(STORAGE_DIR, "parameters_metadata.json")
 LIVE_STATE_PATH  = os.path.join(STORAGE_DIR, "live_state.json")
@@ -83,12 +84,29 @@ RECONNECT_WAIT_SECONDS = 10
 # ════════════════════════════════════════════════════════════════════════════
 
 def normalize_percentage(value: float, name: str) -> float:
-    """Convierte valores > 1 al formato decimal (ej: 2 → 0.02)."""
+    """
+    Convierte porcentajes al formato decimal.
+    Si el valor introducido ya cae en el rango válido del campo (ej. 0.15 para 15%), se mantiene.
+    Si está fuera del rango pero al dividirlo por 100 entra en él (ej. 0.5 para 0.5% en SMC_OB_STRENGTH), se divide.
+    Valores > 1 genéricamente se asumen en formato porcentaje entero y se dividen.
+    """
+    if name in PERCENTAGE_FIELDS:
+        lo, hi = PERCENTAGE_FIELDS[name]
+        if lo <= value <= hi:
+            return value
+        
+        converted = value / 100.0
+        if lo <= converted <= hi:
+            logger.warning(f"{name}={value} convertido a decimal={converted:.6f}")
+            return converted
+
     if value > 1:
         converted = value / 100.0
         logger.warning(f"{name}={value} convertido a decimal={converted:.6f}")
         return converted
+        
     return value
+
 
 # Alias usado en tests
 normalize_risk_pct = normalize_percentage
@@ -100,6 +118,10 @@ PERCENTAGE_FIELDS = {
     "TRAILING_STOP_ACTIVATION":(0.001, 0.99),
     "TRAILING_STOP_DISTANCE":  (0.001, 0.50),
     "BREAKEVEN_ACTIVATION":    (0.001, 0.90),
+    "MAX_DRAWDOWN_HALT_PCT":   (0.01,  0.50),
+    "SMC_OB_STRENGTH":         (0.001, 0.05),
+    "LIQ_CLUSTER_PCT":         (0.0005, 0.02),
+    "NO_SL_SIZE_PCT":          (0.01,  0.25),
 }
 
 def validate_percentage(name: str, value: float) -> float:
@@ -160,17 +182,25 @@ MIN_CONFIDENCE = validate_percentage(
     "MIN_CONFIDENCE",
     normalize_percentage(float(dyn.get("MIN_CONFIDENCE", 0.60)), "MIN_CONFIDENCE")
 )
+MAX_DRAWDOWN_HALT_PCT = validate_percentage(
+    "MAX_DRAWDOWN_HALT_PCT",
+    normalize_percentage(float(dyn.get("MAX_DRAWDOWN_HALT_PCT", 0.15)), "MAX_DRAWDOWN_HALT_PCT")
+)
 
 MAX_CONSECUTIVE_WINS   = int(dyn.get("MAX_CONSECUTIVE_WINS", 3))
 MAX_CONSECUTIVE_LOSSES = int(dyn.get("MAX_CONSECUTIVE_LOSSES", 2))
 RISK_INCREASE_FACTOR   = float(dyn.get("RISK_INCREASE_FACTOR", 1.25))
 RISK_REDUCTION_FACTOR  = float(dyn.get("RISK_REDUCTION_FACTOR", 0.5))
 
-NO_SL_SIZE_PCT = float(dyn.get("NO_SL_SIZE_PCT", 0.10))   # % del balance sin SL
+NO_SL_SIZE_PCT = validate_percentage(
+    "NO_SL_SIZE_PCT",
+    normalize_percentage(float(dyn.get("NO_SL_SIZE_PCT", 0.10)), "NO_SL_SIZE_PCT")
+)
 MIN_SIZE_USDT  = float(dyn.get("MIN_SIZE_USDT", 5.0))
 USE_LIMIT_ORDERS = bool(dyn.get("USE_LIMIT_ORDERS", True))   # Órdenes Límite (Maker Fee 0.020%)
 DCA_ATR_MULT_1 = float(dyn.get("DCA_ATR_MULT_1", 1.0))
 DCA_ATR_MULT_2 = float(dyn.get("DCA_ATR_MULT_2", 2.0))
+DCA_COOLDOWN_MINUTES = int(dyn.get("DCA_COOLDOWN_MINUTES", 15))  # Cooldown mínimo de 15 min entre escalados DCA
 
 # Stops dinámicos
 ATR_MULTIPLIER        = float(dyn.get("ATR_MULTIPLIER", 1.5))
@@ -204,11 +234,17 @@ SL_MIN_MULTIPLIER       = float(dyn.get("SL_MIN_MULTIPLIER", 0.8))
 # ════════════════════════════════════════════════════════════════════════════
 
 SMC_LOOKBACK   = int(dyn.get("SMC_LOOKBACK", 20))
-SMC_OB_STRENGTH= float(dyn.get("SMC_OB_STRENGTH", 0.005))  # 0.5% mínimo movimiento
+SMC_OB_STRENGTH= validate_percentage(
+    "SMC_OB_STRENGTH",
+    normalize_percentage(float(dyn.get("SMC_OB_STRENGTH", 0.005)), "SMC_OB_STRENGTH")
+)
 WYCKOFF_LOOKBACK = int(dyn.get("WYCKOFF_LOOKBACK", 50))
 
 LIQ_LOOKBACK    = int(dyn.get("LIQ_LOOKBACK", 50))
-LIQ_CLUSTER_PCT = float(dyn.get("LIQ_CLUSTER_PCT", 0.002))  # 0.2% tolerancia
+LIQ_CLUSTER_PCT = validate_percentage(
+    "LIQ_CLUSTER_PCT",
+    normalize_percentage(float(dyn.get("LIQ_CLUSTER_PCT", 0.002)), "LIQ_CLUSTER_PCT")
+)
 
 BTC_CORR_THRESHOLD = float(dyn.get("BTC_CORR_THRESHOLD", 0.6))
 

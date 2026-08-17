@@ -57,28 +57,56 @@ class MLEngine:
         logger.info(f"Creando nuevo modelo para {path}")
         return self._new_model()
 
-    def _new_model(self):
-        rf = RandomForestClassifier(
-            n_estimators=self.config.AI_BASE_ESTIMATORS,
-            max_depth=6,
-            min_samples_leaf=5,
-            class_weight='balanced_subsample',
-            random_state=self.config.RANDOM_STATE,
-            warm_start=False,
-            n_jobs=1
-        )
-        xgb = XGBClassifier(
-            n_estimators=self.config.AI_BASE_ESTIMATORS,
-            max_depth=4,
-            learning_rate=0.05,
-            random_state=self.config.RANDOM_STATE,
-            n_jobs=1,
-            eval_metric="logloss"
-        )
+    @staticmethod
+    def create_ensemble(config, params=None):
+        """
+        Crea un ensambleVotingClassifier unificado de RandomForest + XGBoost.
+        """
+        rf_params = {
+            'n_estimators': config.AI_BASE_ESTIMATORS,
+            'max_depth': 6,
+            'min_samples_leaf': 5,
+            'class_weight': 'balanced_subsample',
+            'random_state': config.RANDOM_STATE,
+            'n_jobs': 1
+        }
+        xgb_params = {
+            'n_estimators': config.AI_BASE_ESTIMATORS,
+            'max_depth': 4,
+            'learning_rate': 0.05,
+            'random_state': config.RANDOM_STATE,
+            'n_jobs': 1,
+            'eval_metric': "logloss"
+        }
+
+        if params:
+            if 'rf' in params:
+                rf_params.update(params['rf'])
+            if 'xgb' in params:
+                xgb_params.update(params['xgb'])
+
+        rf = RandomForestClassifier(**rf_params)
+        xgb = XGBClassifier(**xgb_params)
+
         return VotingClassifier(
             estimators=[('rf', rf), ('xgb', xgb)],
             voting='soft'
         )
+
+    def _new_model(self):
+        return self.create_ensemble(self.config)
+
+    def promote_candidate(self, candidate_outcome, candidate_sl=None):
+        """
+        Promueve de forma atómica un modelo candidato validado a producción.
+        """
+        if candidate_outcome is not None:
+            self.model_outcome = candidate_outcome
+        if candidate_sl is not None:
+            self.model_sl = candidate_sl
+
+        self.save_models()
+        logger.info(f"✅ Modelo para {self.symbol} promovido exitosamente a producción (model_v_current).")
 
     # ── Predicciones ─────────────────────────────────────────────────────────
 
@@ -146,9 +174,11 @@ class MLEngine:
         try:
             joblib.dump(model, temp)
             checksum = self._generate_checksum(temp)
-            with open(path + ".sha256", "w") as f:
+            temp_sha = temp + '.sha256'
+            with open(temp_sha, 'w') as f:
                 f.write(checksum)
             os.replace(temp, path)
+            os.replace(temp_sha, path + '.sha256')
         except Exception as e:
             if os.path.exists(temp):
                 os.remove(temp)

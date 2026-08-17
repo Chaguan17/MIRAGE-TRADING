@@ -182,21 +182,24 @@ export default function ActiveTradesTable({ operaciones_activas, livePrices, lev
               operaciones_activas.map((op, idx) => {
                 const live = livePrices[op.pair] || op.current_price;
                 const isLong = op.type === "LONG";
-                const livePnl = parseFloat(
-                  (
-                    (live / op.entry - 1) *
-                    (isLong ? 1 : -1) *
-                    (op.position_value || 0)
-                  ).toFixed(2),
-                );
+                const safeEntry = op.entry && op.entry > 0 ? op.entry : 1;
+                const livePnl = (op.current_pnl !== undefined && op.current_pnl !== null)
+                  ? parseFloat(op.current_pnl)
+                  : parseFloat(
+                      (
+                        (live / safeEntry - 1) *
+                        (isLong ? 1 : -1) *
+                        (op.position_value || (op.size * op.entry) || 0)
+                      ).toFixed(2)
+                    ) || 0;
                 const roiPct = parseFloat(
                   (
-                    (live / op.entry - 1) *
+                    (live / safeEntry - 1) *
                     (isLong ? 1 : -1) *
                     100 *
-                    (leverage || 10)
-                  ).toFixed(2),
-                );
+                    (op.leverage || leverage || 10)
+                  ).toFixed(2)
+                ) || 0;
 
                 const progressPct = calculateProgressPct(
                   live,

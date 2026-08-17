@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 import pandas as pd
 import json
 import os
+import time
 import sqlite3
 import logging
 import importlib
@@ -116,6 +117,10 @@ _LAST_LIVE_STATE = {
 _LAST_HISTORY_STATE = {
 	"chart_data": [], "ultimas_operaciones": []
 }
+_CACHED_REAL_CLIENT = None
+_LAST_BINANCE_SYNC_TS = 0.0
+_CACHED_REAL_POSITIONS = {}
+_LAST_REAL_POSITIONS_TS = 0.0
 
 def sanitize_config(config_dict):
 	sanitized = config_dict.copy()
@@ -202,9 +207,21 @@ def _fetch_dashboard_data():
 			# Enriquecer directamente desde Binance si está en Modo Real para cero desincronización
 			if not current_config.get("PAPER_TRADING", True) and cfg.API_KEY:
 				try:
+					global _CACHED_REAL_CLIENT, _LAST_BINANCE_SYNC_TS, _CACHED_REAL_POSITIONS, _LAST_REAL_POSITIONS_TS
 					from binance_api import MirageBinance
-					real_client = MirageBinance(cfg.API_KEY, cfg.API_SECRET, paper_trading=False)
-					real_positions = real_client.get_open_positions()
+					if _CACHED_REAL_CLIENT is None or _CACHED_REAL_CLIENT.paper_trading:
+						_CACHED_REAL_CLIENT = MirageBinance(cfg.API_KEY, cfg.API_SECRET, paper_trading=False)
+					real_client = _CACHED_REAL_CLIENT
+					
+					now_pos_ts = time.time()
+					if now_pos_ts - _LAST_REAL_POSITIONS_TS > 5.0 or not _CACHED_REAL_POSITIONS:
+						try:
+							_CACHED_REAL_POSITIONS = real_client.get_open_positions() or {}
+							_LAST_REAL_POSITIONS_TS = now_pos_ts
+						except Exception as pos_err:
+							logger.warning(f"Error consultando posiciones reales de Binance: {pos_err}")
+					
+					real_positions = _CACHED_REAL_POSITIONS
 					
 					active_pairs_in_list = {t["pair"] for t in active_trades}
 
@@ -250,61 +267,70 @@ def _fetch_dashboard_data():
 											t["sl"] = t["entry"] * 0.98 if t.get("type") == "LONG" else t["entry"] * 1.02
 										if tp_val > 0:
 											t["tp"] = tp_val
+										else:
+											if t.get("type") == "SHORT" and (not t.get("tp") or float(t.get("tp", 0)) >= t.get("entry", 0)):
+												t["tp"] = round(t["entry"] * 0.95, 4)
+											elif t.get("type") == "LONG" and (not t.get("tp") or float(t.get("tp", 0)) <= t.get("entry", 0)):
+												t["tp"] = round(t["entry"] * 1.05, 4)
 										t["position_value"] = round(t["size"] * t["entry"], 2)
-					# Auto-sincronizar el historial de ejecuciones reales de Binance a la BD SQLite
-					try:
-						conn_sync = sqlite3.connect(cfg.DB_PATH, timeout=5.0)
-						# Limpiar registros antiguos corruptos con pnl 0 de ejecuciones de entrada
-						conn_sync.execute("DELETE FROM trades WHERE is_paper = 'REAL' AND pnl_usdt = 0.0")
-						for sym in ['ETH/USDT:USDT', 'BTC/USDT:USDT', 'XRP/USDT:USDT']:
-							clean_sym = sym.replace(':USDT', '').replace('/', '')
-							trades_from_binance = real_client.client.fetch_my_trades(sym, limit=50)
-							for t in trades_from_binance:
-								info = t.get('info', {})
-								rpnl = float(info.get('realizedPnl') or t.get('realizedPnl') or 0.0)
-								# Solo procesar órdenes de CIERRE de posición (que generan PnL realizado)
-								if abs(rpnl) <= 1e-6:
-									continue
+					# Auto-sincronizar el historial de ejecuciones reales de Binance a la BD SQLite (cada 30s)
+					now_sync_ts = time.time()
+					if now_sync_ts - _LAST_BINANCE_SYNC_TS > 30.0:
+						_LAST_BINANCE_SYNC_TS = now_sync_ts
+						try:
+							conn_sync = sqlite3.connect(cfg.DB_PATH, timeout=30.0)
+							conn_sync.execute("PRAGMA journal_mode=WAL;")
+							# Limpiar registros antiguos corruptos con pnl 0 de ejecuciones de entrada
+							conn_sync.execute("DELETE FROM trades WHERE is_paper = 'REAL' AND pnl_usdt = 0.0")
+							for sym in ['ETH/USDT:USDT', 'BTC/USDT:USDT', 'XRP/USDT:USDT']:
+								clean_sym = sym.replace(':USDT', '').replace('/', '')
+								trades_from_binance = real_client.client.fetch_my_trades(sym, limit=50)
+								for t in trades_from_binance:
+									info = t.get('info', {})
+									rpnl = float(info.get('realizedPnl') or t.get('realizedPnl') or 0.0)
+									# Solo procesar cierres reales de posición con PnL significativo (> 0.005 USDT)
+									if abs(rpnl) < 0.005:
+										continue
 
-								oid = str(t.get('order') or t.get('id') or '')
-								if not oid:
-									continue
+									fill_id = str(t.get('order') or t.get('id') or '')
+									if not fill_id:
+										continue
 
-								closed_dt = str(t.get('datetime', '')).replace('T', ' ').replace('.000Z', '').replace('Z', '')[:19]
-								t_ts = t.get('timestamp', 0)
-								open_fills = [tr for tr in trades_from_binance if tr.get('timestamp', 0) < t_ts and abs(float(tr.get('info',{}).get('realizedPnl', 0))) <= 1e-6]
-								opened_dt = open_fills[-1].get('datetime', '').replace('T', ' ').replace('.000Z', '').replace('Z', '')[:19] if open_fills else closed_dt
+									closed_dt = str(t.get('datetime', '')).replace('T', ' ').replace('.000Z', '').replace('Z', '')[:19]
+									t_ts = t.get('timestamp', 0)
+									open_fills = [tr for tr in trades_from_binance if tr.get('timestamp', 0) < t_ts and abs(float(tr.get('info',{}).get('realizedPnl', 0))) <= 1e-6]
+									opened_dt = open_fills[-1].get('datetime', '').replace('T', ' ').replace('.000Z', '').replace('Z', '')[:19] if open_fills else closed_dt
 
-								fill_side = t.get('side', '').lower()
-								action = 'SHORT' if fill_side == 'buy' else 'LONG'
-								close_p = float(t.get('price', 0))
-								amount = float(t.get('amount', 0))
+									fill_side = t.get('side', '').lower()
+									action = 'SHORT' if fill_side == 'buy' else 'LONG'
+									close_p = float(t.get('price', 0))
+									amount = float(t.get('amount', 0))
 
-								if amount <= 0:
-									continue
+									if amount <= 0:
+										continue
 
-								# Calcular precio de entrada implícito a partir del PnL realizado
-								if action == 'SHORT':
-									entry_p = close_p + (rpnl / amount)
-								else:
-									entry_p = close_p - (rpnl / amount)
+									# Calcular precio de entrada implícito a partir del PnL realizado
+									if action == 'SHORT':
+										entry_p = close_p + (rpnl / amount)
+									else:
+										entry_p = close_p - (rpnl / amount)
 
-								entry_p = round(max(0.0001, entry_p), 4)
-								close_p = round(close_p, 4)
-								rpnl_rounded = round(rpnl, 4)
-								res_str = 'WIN' if rpnl >= 0 else 'LOSS'
+									entry_p = round(max(0.0001, entry_p), 4)
+									close_p = round(close_p, 4)
+									rpnl_rounded = round(rpnl, 4)
+									res_str = 'WIN' if rpnl >= 0 else 'LOSS'
 
-								c = conn_sync.execute('SELECT COUNT(*) FROM trades WHERE order_id = ?', (oid,))
-								if c.fetchone()[0] == 0:
-									conn_sync.execute(
-										'INSERT INTO trades (timestamp, pair, action, entry_price, close_price, size, result, pnl_usdt, order_id, is_paper, opened_at, closed_at) '
-										'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-										(closed_dt, clean_sym, action, entry_p, close_p, amount, res_str, rpnl_rounded, oid, 'REAL', opened_dt, closed_dt)
-									)
-						conn_sync.commit()
-						conn_sync.close()
-					except Exception as sync_err:
-						logger.warning(f"Error sincronizando historial real de Binance: {sync_err}")
+									c = conn_sync.execute('SELECT COUNT(*) FROM trades WHERE order_id = ? OR (pair = ? AND timestamp = ? AND pnl_usdt = ?)', (fill_id, clean_sym, closed_dt, rpnl_rounded))
+									if c.fetchone()[0] == 0:
+										conn_sync.execute(
+											'INSERT INTO trades (timestamp, pair, action, entry_price, close_price, size, result, pnl_usdt, order_id, is_paper, opened_at, closed_at) '
+											'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+											(closed_dt, clean_sym, action, entry_p, close_p, amount, res_str, rpnl_rounded, fill_id, 'REAL', opened_dt, closed_dt)
+										)
+							conn_sync.commit()
+							conn_sync.close()
+						except Exception as sync_err:
+							logger.warning(f"Error sincronizando historial real de Binance: {sync_err}")
 				except Exception as binance_sync_err:
 					logger.warning(f"No se pudo sincronizar directamente con Binance: {binance_sync_err}")
 			
@@ -367,6 +393,15 @@ def _fetch_dashboard_data():
 				else:
 					data["chart_data"] = []
 					data["ultimas_operaciones"] = []
+
+				# Cargar registros de auditoría de desincronización (POSITION DESYNC)
+				try:
+					conn_desync = sqlite3.connect(cfg.DB_PATH, timeout=5.0)
+					desync_df = pd.read_sql("SELECT * FROM desync_audit_logs ORDER BY id DESC LIMIT 20", conn_desync)
+					conn_desync.close()
+					data["desync_logs"] = desync_df.to_dict(orient="records") if not desync_df.empty else []
+				except Exception:
+					data["desync_logs"] = []
 			except Exception as e:
 				logger.error(f"Error reading history from DB: {e}")
 				data["chart_data"] = _LAST_HISTORY_STATE["chart_data"]
@@ -436,6 +471,18 @@ async def get_full_performance(_ = Depends(verify_auth)):
 	except Exception as e:
 		logger.error(f"Error reading full history: {e}")
 		return []
+
+@app.get("/api/backtest-vs-real")
+async def get_backtest_vs_real_comparison(symbol: str = "ETHUSDT", _ = Depends(verify_auth)):
+	"""Compara cuantitativamente la ejecución simulada (Backtest) vs dinero real."""
+	try:
+		from backtest_vs_real import BacktestVsRealComparator
+		comparator = BacktestVsRealComparator()
+		res = comparator.compare(symbol=symbol)
+		return sanitize_nan(res)
+	except Exception as e:
+		logger.error(f"Error calculando comparación Backtest vs Real: {e}")
+		return {"status": "error", "message": str(e)}
 
 class CommandInput(BaseModel):
 	action: str
@@ -568,12 +615,21 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	MARTINGALE_MULTIPLIER: float | None = None
 	MARTINGALE_MAX_STEPS: int | None = None
 	MIN_SIZE_USDT: float | None = Field(None, ge=0)
-	# Parámetros adicionales
+	# Parámetros adicionales y de análisis
 	TRAILING_ATR_MULTIPLIER: float | None = Field(None, ge=0)
 	USE_LIMIT_ORDERS: bool | None = None
 	VETO_CRASH_PCT: float | None = Field(None, ge=0, le=100)
 	GLOBAL_RSI_OB_BASE: float | None = Field(None, ge=0)
 	GLOBAL_RSI_OS_BASE: float | None = Field(None, ge=0)
+	MAX_DRAWDOWN_HALT_PCT: float | None = Field(None, ge=0, le=100)
+	NO_SL_SIZE_PCT: float | None = Field(None, ge=0, le=100)
+	SMC_LOOKBACK: int | None = Field(None, ge=1)
+	SMC_OB_STRENGTH: float | None = Field(None, ge=0, le=100)
+	WYCKOFF_LOOKBACK: int | None = Field(None, ge=1)
+	LIQ_LOOKBACK: int | None = Field(None, ge=1)
+	LIQ_CLUSTER_PCT: float | None = Field(None, ge=0, le=100)
+	BTC_CORR_THRESHOLD: float | None = Field(None, ge=0, le=1)
+	VWAP_BAND_MULT: float | None = Field(None, ge=0)
 	# Estrategias Habilitadas
 	STRATEGY_TREND: bool | None = None
 	STRATEGY_REVERSION: bool | None = None
@@ -598,6 +654,7 @@ def update_config(new_settings: ConfigUpdate, _ = Depends(verify_auth)):
 	
 	percentage_fields = [
 		"RISK_PER_TRADE",
+		"MAX_RISK_CAP",
 		"MIN_CONFIDENCE",
 		"TRAILING_STOP_ACTIVATION",
 		"TRAILING_STOP_DISTANCE",
@@ -605,7 +662,11 @@ def update_config(new_settings: ConfigUpdate, _ = Depends(verify_auth)):
 		"ADAPTIVE_RISK_FLOOR",
 		"ADAPTIVE_RISK_CEIL",
 		"ADAPTIVE_DRAWDOWN_FLOOR",
+		"MAX_DRAWDOWN_HALT_PCT",
 		"VETO_CRASH_PCT",
+		"NO_SL_SIZE_PCT",
+		"SMC_OB_STRENGTH",
+		"LIQ_CLUSTER_PCT",
 	]
 	
 	for field in percentage_fields:

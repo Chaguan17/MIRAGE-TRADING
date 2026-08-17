@@ -11,7 +11,7 @@ export default function KPIGrid({ data, liveDailyPnL }) {
     },
     {
       label: "Balance Cuenta",
-      value: data.balance_actual
+      value: data.balance_actual !== undefined && data.balance_actual !== null
         ? `${data.balance_actual.toFixed(2)}`
         : "—",
       unit: "USDT",
@@ -37,7 +37,7 @@ export default function KPIGrid({ data, liveDailyPnL }) {
     },
     {
       label: "Win Rate Algorítmico",
-      value: `${data.win_rate}`,
+      value: data.win_rate !== undefined ? `${data.win_rate}` : "—",
       unit: "%",
       color: "#aa3bff",
     },

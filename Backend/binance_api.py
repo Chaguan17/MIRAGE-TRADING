@@ -261,18 +261,63 @@ class MirageBinance:
             return {}
         try:
             self.client.options['warnOnFetchOpenOrdersWithoutSymbol'] = False
-            raw_positions = self.client.fetch_positions(symbols)
+            try:
+                raw_positions = self.client.fetch_positions(symbols)
+            except Exception as pos_err:
+                if "-1021" in str(pos_err) or "timestamp" in str(pos_err).lower():
+                    try:
+                        self.client.load_time_difference()
+                    except Exception:
+                        pass
+                    raw_positions = self.client.fetch_positions(symbols)
+                else:
+                    raise pos_err
 
             open_orders_by_symbol = {}
             try:
                 all_orders = self.client.fetch_open_orders()
-                for o in all_orders:
-                    raw_sym = o.get('symbol', '').replace('/', '').replace(':USDT', '')
-                    if raw_sym not in open_orders_by_symbol:
-                        open_orders_by_symbol[raw_sym] = []
-                    open_orders_by_symbol[raw_sym].append(o)
             except Exception as order_err:
-                logger.warning(f"No se pudieron consultar órdenes abiertas globales: {order_err}")
+                if "-1021" in str(order_err) or "timestamp" in str(order_err).lower():
+                    try:
+                        self.client.load_time_difference()
+                        all_orders = self.client.fetch_open_orders()
+                    except Exception as retry_err:
+                        all_orders = []
+                        logger.warning(f"No se pudieron consultar órdenes abiertas globales tras re-sincronizar reloj: {retry_err}")
+                else:
+                    all_orders = []
+                    logger.warning(f"No se pudieron consultar órdenes abiertas globales: {order_err}")
+
+            # Consultar órdenes condicionales de Binance Futuros (Algo Orders: STOP, TAKE_PROFIT)
+            algo_orders_list = []
+            try:
+                if hasattr(self.client, 'fapiPrivateGetOpenAlgoOrders'):
+                    algo_orders_raw = self.client.fapiPrivateGetOpenAlgoOrders()
+                    if isinstance(algo_orders_raw, list):
+                        algo_orders_list = algo_orders_raw
+            except Exception as algo_err:
+                logger.debug(f"fapiPrivateGetOpenAlgoOrders error: {algo_err}")
+
+            for o in all_orders:
+                raw_sym = o.get('symbol', '').replace('/', '').replace(':USDT', '')
+                if raw_sym not in open_orders_by_symbol:
+                    open_orders_by_symbol[raw_sym] = []
+                open_orders_by_symbol[raw_sym].append(o)
+
+            for ao in algo_orders_list:
+                raw_sym = ao.get('symbol', '').replace('/', '').replace(':USDT', '')
+                if raw_sym not in open_orders_by_symbol:
+                    open_orders_by_symbol[raw_sym] = []
+                open_orders_by_symbol[raw_sym].append({
+                    'id': ao.get('algoId'),
+                    'symbol': raw_sym,
+                    'type': ao.get('orderType'),
+                    'side': ao.get('side'),
+                    'stopPrice': float(ao.get('triggerPrice') or ao.get('price') or 0.0),
+                    'triggerPrice': float(ao.get('triggerPrice') or 0.0),
+                    'price': float(ao.get('price') or 0.0),
+                    'info': ao
+                })
 
             res = {}
             for p in raw_positions:
@@ -282,21 +327,40 @@ class MirageBinance:
                     sl = 0.0
                     tp = 0.0
                     orders = open_orders_by_symbol.get(clean_sym, [])
+                    entry_p = float(p.get('entryPrice', 0) or 0)
+                    is_long = str(p.get('side', '')).upper() == 'LONG'
                     for o in orders:
                         info = o.get('info', {})
-                        o_type = str(info.get('origType') or info.get('type') or o.get('type') or '').upper()
+                        orig_type = str(info.get('origType', '') or info.get('type', '') or o.get('type', '') or '').upper()
                         trigger_p = float(
                             o.get('stopPrice') or
                             o.get('triggerPrice') or
-                            o.get('price') or
                             info.get('stopPrice') or
                             info.get('triggerPrice') or
+                            o.get('price') or
                             0.0
                         )
-                        if 'STOP' in o_type:
+                        if trigger_p <= 0:
+                            continue
+
+                        # Clasificación precisa de orden condicional Stop Loss vs Take Profit
+                        if 'STOP' in orig_type and 'TAKE' not in orig_type:
                             sl = trigger_p
-                        elif 'TAKE_PROFIT' in o_type or 'LIMIT' in o_type:
+                        elif 'TAKE' in orig_type:
                             tp = trigger_p
+                        else:
+                            # Fallback si origType no trae STOP explícito: comparar precio gatillo vs precio de entrada
+                            if entry_p > 0:
+                                if is_long:
+                                    if trigger_p < entry_p:
+                                        sl = trigger_p
+                                    else:
+                                        tp = trigger_p
+                                else:
+                                    if trigger_p > entry_p:
+                                        sl = trigger_p
+                                    else:
+                                        tp = trigger_p
 
                     res[clean_sym] = {
                         'contracts': contracts,

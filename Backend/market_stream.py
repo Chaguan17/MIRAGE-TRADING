@@ -73,7 +73,7 @@ class MarketStream:
                 on_open=self._on_open,
             )
 
-            ws_conn_thread = threading.Thread(target=self.ws.run_forever, daemon=True)
+            ws_conn_thread = threading.Thread(target=self.ws.run_forever, kwargs={'ping_interval': 20, 'ping_timeout': 10}, daemon=True)
             ws_conn_thread.start()
 
             # Wait while connection is alive
@@ -132,6 +132,7 @@ class MarketStream:
                         "close": float(kline["c"]),
                         "volume": float(kline["v"]),
                         "is_closed": kline["x"],
+                        "last_update": time.time(),
                     }
                     with self.lock:
                         if sym not in self.latest_candle:
@@ -210,6 +211,34 @@ class MarketStream:
             df.at[idx, "funding_rate"] = self.funding_rate.get(sym, 0.0)
 
             return df
+
+    def is_data_fresh(self, symbol, tf, max_age_seconds=180):
+        """
+        Verifica si los datos del símbolo y timeframe están recibiendo ticks activos vía WebSocket.
+        Retorna False solo si no se han recibido ticks del WebSocket dentro del umbral max_age_seconds.
+        """
+        sym = symbol.lower()
+        with self.lock:
+            latest = self.latest_candle.get(sym, {}).get(tf)
+            if latest and "last_update" in latest:
+                age = time.time() - float(latest["last_update"])
+                return age <= max_age_seconds
+
+            # Fallback seguro: si el stream aún no ha recibido ticks pero tiene caché REST inicializado
+            base_df = self.cache.get(sym, {}).get(tf)
+            if base_df is not None and not base_df.empty:
+                last_ts = base_df['timestamp'].iloc[-1]
+                try:
+                    if hasattr(last_ts, 'timestamp'):
+                        ts_sec = last_ts.timestamp()
+                    else:
+                        ts_sec = float(last_ts) / 1000.0 if float(last_ts) > 1e11 else float(last_ts)
+                    age = time.time() - ts_sec
+                    return age < max_age_seconds
+                except Exception:
+                    return False
+
+            return False
 
 
 stream_manager = MarketStream()

@@ -22,22 +22,37 @@ def is_paper_trading(client):
     return True
 
 
+def format_order_amount(symbol, amount):
+    sym = str(symbol or '').upper().replace('/', '').replace(':USDT', '')
+    amt = float(amount or 0)
+    if sym in ['XRPUSDT', 'ADAUSDT', 'HBARUSDT', 'DOGEUSDT']:
+        return float(int(amt))
+    elif sym in ['BTCUSDT', 'ETHUSDT']:
+        return round(amt, 3)
+    elif sym in ['SOLUSDT', 'BNBUSDT', 'LINKUSDT']:
+        return round(amt, 2)
+    else:
+        return round(amt, 2)
+
+
 def _safe_create_order(client, symbol, order_type, side, amount, price=None, params=None, action='LONG'):
     """
-    Crea una orden en Binance. Si Binance devuelve el error -4061 (Hedge Mode setting),
-    reintenta automáticamente adjuntando el parámetro positionSide ('LONG' o 'SHORT').
+    Crea una orden en Binance. Ajusta la precisión del monto según el símbolo.
+    Si Binance devuelve el error -4061 (Hedge Mode setting), reintenta automáticamente
+    adjuntando el parámetro positionSide ('LONG' o 'SHORT') y removiendo 'reduceOnly' (error -1106).
     """
     if params is None:
         params = {}
 
     pos_side = 'LONG' if action == 'LONG' else 'SHORT'
+    formatted_amount = format_order_amount(symbol, amount)
 
     try:
         return client.client.create_order(
             symbol=symbol,
             type=order_type,
             side=side.upper(),
-            amount=amount,
+            amount=formatted_amount,
             price=price,
             params=params
         )
@@ -46,11 +61,14 @@ def _safe_create_order(client, symbol, order_type, side, amount, price=None, par
         if "-4061" in err_str or "position side" in err_str.lower():
             logger.info(f"🔄 Reintentando orden {symbol} con positionSide={pos_side} (Modo Cobertura detectado)...")
             hedge_params = {**params, 'positionSide': pos_side}
+            # En Modo Cobertura (Hedge Mode), Binance prohíbe el parámetro 'reduceOnly' (error -1106)
+            hedge_params.pop('reduceOnly', None)
+            hedge_params.pop('reduceonly', None)
             return client.client.create_order(
                 symbol=symbol,
                 type=order_type,
                 side=side.upper(),
-                amount=amount,
+                amount=formatted_amount,
                 price=price,
                 params=hedge_params
             )
@@ -167,6 +185,8 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None, signal_price=N
         sl_final = None
         tp_final = None
 
+        cancel_all_stop_orders(client, symbol)
+
         # Stop Loss LIMIT (Maker 0.020%) — Opción B: 3 intentos, si falla cierra posición
         if sl is not None and sl > 0:
             sl_side = 'sell' if action == 'LONG' else 'buy'
@@ -182,7 +202,7 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None, signal_price=N
                         client=client, symbol=symbol,
                         order_type='STOP', side=sl_side,
                         amount=size, price=sl_limit,
-                        params={'stopPrice': sl_trigger},
+                        params={'stopPrice': sl_trigger, 'reduceOnly': True},
                         action=action
                     )
                     sl_success = True
@@ -220,7 +240,7 @@ def execute_trade(client, symbol, action, size, sl=None, tp=None, signal_price=N
                     client=client, symbol=symbol,
                     order_type='TAKE_PROFIT', side=tp_side,
                     amount=size, price=tp_limit,
-                    params={'stopPrice': tp_trigger},
+                    params={'stopPrice': tp_trigger, 'reduceOnly': True},
                     action=action
                 )
                 tp_success = True
@@ -262,6 +282,8 @@ def close_position(client, symbol, action, size):
         logger.info(f"[PAPER TRADING] Cierre simulado: {close_side.upper()} {size} {symbol}")
         nm.add_notification("INFO", f"Cierre Paper Simulado ({symbol})", f"Tamaño: {size}", symbol)
         return {"dry_run": True, "closed": True}
+
+    cancel_all_stop_orders(client, symbol)
 
     try:
         order = None
@@ -314,6 +336,53 @@ def close_position(client, symbol, action, size):
         return None
 
 
+def cancel_all_stop_orders(client, symbol):
+    """
+    Cancela todas las órdenes condicionales Stop/TP abiertas en Binance para un símbolo.
+    Previene la acumulación de órdenes Stop Limit duplicadas en Binance.
+    """
+    if is_paper_trading(client):
+        return True
+
+    try:
+        clean_sym = symbol.replace(':USDT', '').replace('/', '')
+        
+        # 1. Cancelar Algo Orders (órdenes condicionales STOP/TP de Binance Futuros)
+        try:
+            if hasattr(client.client, 'fapiPrivateDeleteAlgoOpenOrders'):
+                client.client.fapiPrivateDeleteAlgoOpenOrders({'symbol': clean_sym})
+                logger.info(f"🧹 Algo Open Orders canceladas en Binance para {symbol}")
+        except Exception as algo_err:
+            logger.debug(f"Error cancelando Algo Orders para {symbol}: {algo_err}")
+
+        # 2. Cancelar órdenes condicionales estándar
+        open_orders = client.client.fetch_open_orders(symbol)
+        if not open_orders:
+            return True
+
+        cancelled_count = 0
+        for o in open_orders:
+            o_info = o.get('info', {})
+            orig_type = str(o_info.get('origType', '') or o_info.get('type', '') or o.get('type', '') or '').upper()
+            stop_price = float(o.get('stopPrice') or o.get('triggerPrice') or o_info.get('stopPrice') or o_info.get('triggerPrice') or 0.0)
+
+            # Si es cualquier orden condicional Stop/TP o tiene un triggerPrice > 0
+            if 'STOP' in orig_type or 'TAKE' in orig_type or stop_price > 0:
+                try:
+                    order_id = o['id']
+                    client.client.cancel_order(order_id, symbol)
+                    cancelled_count += 1
+                except Exception as cancel_err:
+                    logger.warning(f"Error cancelando orden condicional {o.get('id')}: {cancel_err}")
+
+        if cancelled_count > 0:
+            logger.info(f"🧹 {cancelled_count} orden(es) condicionales Stop/TP duplicadas canceladas en Binance para {symbol}")
+        return True
+    except Exception as e:
+        logger.warning(f"Error consultando/cancelando órdenes condicionales en {symbol}: {e}")
+        return False
+
+
 def cancel_all_orders(client, symbol):
     """Cancela todas las órdenes abiertas de un símbolo en Binance."""
     if is_paper_trading(client):
@@ -330,64 +399,104 @@ def cancel_all_orders(client, symbol):
         return False
 
 
-def update_position_stop_loss(client, symbol, new_sl_price, action, size, sl_prec=2):
+def update_position_stop_loss(client, symbol, new_sl_price, action, size, sl_prec=2, max_attempts=3):
     """
-    Cancela el SL existente en Binance y coloca uno nuevo STOP Limit (Maker 0.020%).
-    Retorna True si exitoso, False si falló (SL anterior puede seguir vigente).
+    Cancela los SL existentes en Binance (evitando duplicados) y coloca uno nuevo STOP Limit (Maker 0.020%).
+    Si falla 3 veces, intenta un STOP_MARKET de emergencia. Si este también falla, ejecuta un cierre a mercado de seguridad.
     """
     import time
-    try:
-        open_orders = client.client.fetch_open_orders(symbol)
-        sl_side = 'sell' if action == 'LONG' else 'buy'
-
-        # Buscar y cancelar órdenes SL existentes (STOP o STOP_MARKET)
-        for o in open_orders:
-            o_info = o.get('info', {})
-            orig_type = str(o_info.get('origType', '') or o_info.get('type', '') or o.get('type', '') or '').upper()
-            if 'STOP' in orig_type and 'TAKE' not in orig_type:
-                if str(o.get('side', '')).lower() == sl_side:
-                    client.client.cancel_order(o['id'], symbol)
-                    logger.info(f"🗑️ SL anterior cancelado: {o['id']}")
-
-        # Colocar nuevo SL LIMIT con buffer de slippage
-        sl_trigger = round(new_sl_price, sl_prec)
-        if action == 'LONG':
-            sl_limit = round(sl_trigger * (1 - SL_LIMIT_BUFFER), sl_prec)
-        else:
-            sl_limit = round(sl_trigger * (1 + SL_LIMIT_BUFFER), sl_prec)
-
-        _safe_create_order(
-            client=client, symbol=symbol,
-            order_type='STOP', side=sl_side,
-            amount=size, price=sl_limit,
-            params={'stopPrice': sl_trigger},
-            action=action
-        )
-        logger.info(f"🛡️ SL Limit actualizado en Binance: trigger={sl_trigger}, limit={sl_limit}")
+    if is_paper_trading(client):
+        logger.info(f"[PAPER TRADING] SL simulado actualizado a {new_sl_price} para {symbol}")
         return True
 
-    except Exception as e:
-        logger.error(f"❌ Error actualizando SL en Binance para {symbol}: {e}")
-        return False
+    # 1. Cancelar TODOS los SL y órdenes condicionales anteriores para prevenir duplicados en Binance
+    cancel_all_stop_orders(client, symbol)
+
+    sl_side = 'sell' if action == 'LONG' else 'buy'
+    sl_trigger = round(new_sl_price, sl_prec)
+    if action == 'LONG':
+        sl_limit = round(sl_trigger * (1 - SL_LIMIT_BUFFER), sl_prec)
+    else:
+        sl_limit = round(sl_trigger * (1 + SL_LIMIT_BUFFER), sl_prec)
+
+    # Validar trigger price contra el precio actual de mercado para prevenir Error -2021 (Order would immediately trigger)
+    try:
+        ticker = client.client.fetch_ticker(symbol)
+        curr_price = float(ticker.get('last') or ticker.get('close') or 0)
+        if curr_price > 0:
+            if action == 'SHORT' and sl_trigger <= curr_price:
+                # Para SHORT, la orden de SL es un BUY STOP y DEBE colocarse por encima del precio actual
+                sl_trigger = round(curr_price * 1.0015, sl_prec)
+                sl_limit = round(sl_trigger * (1 + SL_LIMIT_BUFFER), sl_prec)
+                logger.info(f"📐 SL para SHORT ajustado por encima del precio actual (${curr_price:.2f}) → Trigger: {sl_trigger}")
+            elif action == 'LONG' and sl_trigger >= curr_price:
+                # Para LONG, la orden de SL es un SELL STOP y DEBE colocarse por debajo del precio actual
+                sl_trigger = round(curr_price * 0.9985, sl_prec)
+                sl_limit = round(sl_trigger * (1 - SL_LIMIT_BUFFER), sl_prec)
+                logger.info(f"📐 SL para LONG ajustado por debajo del precio actual (${curr_price:.2f}) → Trigger: {sl_trigger}")
+    except Exception as tick_err:
+        logger.warning(f"No se pudo consultar ticker para validar SL trigger: {tick_err}")
+
+    # 2. Intentar colocar STOP Limit con reintentos
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _safe_create_order(
+                client=client, symbol=symbol,
+                order_type='STOP', side=sl_side,
+                amount=size, price=sl_limit,
+                params={'stopPrice': sl_trigger, 'reduceOnly': True},
+                action=action
+            )
+            logger.info(f"🛡️ SL Limit actualizado en Binance (intento {attempt}): trigger={sl_trigger}, limit={sl_limit}")
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ Fallo al colocar SL Limit en Binance (intento {attempt}/{max_attempts}): {e}")
+            time.sleep(0.5)
+
+    # 3. Fallback: Intentar colocar STOP_MARKET de emergencia
+    logger.warning(f"🚨 3 reintentos de SL Limit fallaron para {symbol}. Intentando STOP_MARKET de emergencia...")
+    try:
+        _safe_create_order(
+            client=client, symbol=symbol,
+            order_type='STOP_MARKET', side=sl_side,
+            amount=size,
+            params={'stopPrice': sl_trigger, 'reduceOnly': True},
+            action=action
+        )
+        logger.info(f"🛡️ STOP_MARKET de emergencia colocado exitosamente en Binance a {sl_trigger}")
+        return True
+    except Exception as emergency_err:
+        logger.error(f"❌ Falló STOP_MARKET de emergencia para {symbol}: {emergency_err}")
+
+    # 4. Fallback final de seguridad: Cierre de emergencia a mercado si no se puede proteger la posición
+    logger.critical(f"🔥 EMERGENCIA CRÍTICA: Imposible asegurar SL para {symbol}. Cerrando posición a mercado para proteger capital.")
+    nm.add_notification("CRITICAL", f"Cierre de Emergencia ({symbol})", "Imposible sincronizar Stop Loss. Posición cerrada a mercado para proteger capital.", symbol)
+    close_position(client, symbol, action, size)
+    return False
 
 
 def update_position_take_profit(client, symbol, new_tp_price, action, size, sl_prec=2):
     """
-    Cancela el TP existente en Binance y coloca uno nuevo TAKE_PROFIT Limit (Maker 0.020%).
-    Retorna True si exitoso, False si falló.
+    Cancela los TP existentes en Binance (evitando duplicados) y coloca uno nuevo TAKE_PROFIT Limit (Maker 0.020%).
     """
+    if is_paper_trading(client):
+        logger.info(f"[PAPER TRADING] TP simulado actualizado a {new_tp_price} para {symbol}")
+        return True
+
     try:
         open_orders = client.client.fetch_open_orders(symbol)
         tp_side = 'sell' if action == 'LONG' else 'buy'
 
-        # Buscar y cancelar órdenes TP existentes (TAKE_PROFIT o TAKE_PROFIT_MARKET)
+        # Cancelar TODOS los TP abiertos anteriores para evitar duplicados
         for o in open_orders:
             o_info = o.get('info', {})
             orig_type = str(o_info.get('origType', '') or o_info.get('type', '') or o.get('type', '') or '').upper()
             if 'TAKE_PROFIT' in orig_type:
-                if str(o.get('side', '')).lower() == tp_side:
+                try:
                     client.client.cancel_order(o['id'], symbol)
-                    logger.info(f"🗑️ TP anterior cancelado: {o['id']}")
+                    logger.info(f"🗑️ TP anterior cancelado en Binance: {o['id']}")
+                except Exception as cancel_err:
+                    logger.warning(f"Error al cancelar TP {o['id']}: {cancel_err}")
 
         # Colocar nuevo TP LIMIT
         tp_trigger = round(new_tp_price, sl_prec)
@@ -397,7 +506,7 @@ def update_position_take_profit(client, symbol, new_tp_price, action, size, sl_p
             client=client, symbol=symbol,
             order_type='TAKE_PROFIT', side=tp_side,
             amount=size, price=tp_limit,
-            params={'stopPrice': tp_trigger},
+            params={'stopPrice': tp_trigger, 'reduceOnly': True},
             action=action
         )
         logger.info(f"🎯 TP Limit actualizado en Binance: trigger={tp_trigger}, limit={tp_limit}")

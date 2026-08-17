@@ -14,6 +14,7 @@ import config as cfg
 logger = logging.getLogger(__name__)
 NOTIFICATIONS_FILE = os.path.join(cfg.STORAGE_DIR, "notifications.json")
 _LOCK = Lock()
+_COOLDOWN = {}
 
 
 def add_notification(level: str, title: str, message: str, symbol: str = None):
@@ -21,6 +22,11 @@ def add_notification(level: str, title: str, message: str, symbol: str = None):
     Agrega una notificación del sistema y la persiste en storage/notifications.json.
     level: 'SUCCESS' | 'WARNING' | 'ERROR' | 'INFO'
     """
+    key = (title, symbol)
+    now = time.time()
+    if key in _COOLDOWN and now - _COOLDOWN[key] < 60:
+        return None
+    _COOLDOWN[key] = now
     item = {
         "id": int(time.time() * 1000),
         "timestamp": datetime.now().strftime("%H:%M:%S"),

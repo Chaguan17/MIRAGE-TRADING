@@ -159,6 +159,7 @@ export default function DashboardView({
         historyLimit={historyLimit}
         setHistoryLimit={setHistoryLimit}
         filteredHistory={filteredHistory}
+        leverage={data.config?.LEVERAGE || 10}
       />
 
       <NotificationDrawer

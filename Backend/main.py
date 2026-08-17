@@ -19,6 +19,7 @@ import data_engine as data_engine
 import risk_manager as risk_manager
 import tracker as tracker
 import notification_manager as nm
+from reconciler import position_reconciler
 from datetime import datetime, time as dtime
 
 logger = logging.getLogger(__name__)
@@ -142,58 +143,73 @@ def main():
     last_known_balance = config.PAPER_BALANCE
 
     # ── Auto-recuperación de posiciones huérfanas en Binance ──────────────
+    # ── Auto-recuperación de posiciones huérfanas en Binance ──────────────
     if not paper_mode:
         try:
             binance_positions = api.get_open_positions()
-            for raw_sym, pos_info in binance_positions.items():
-                sym = raw_sym.replace(":USDT", "").replace("/", "")
-                if sym not in bots:
-                    continue
-                local_trades = bots[sym]["tr"].active_trades
-                if len(local_trades) == 0 and pos_info["contracts"] > 0:
-                    entry_p = pos_info["entry_price"]
-                    contracts = pos_info["contracts"]
-                    side = pos_info["side"]
-                    action = "SHORT" if "SHORT" in side.upper() else "LONG"
+            if binance_positions:
+                for raw_sym, pos_info in binance_positions.items():
+                    sym = raw_sym.replace(":USDT", "").replace("/", "")
+                    if sym not in bots:
+                        continue
+                    local_trades = bots[sym]["tr"].active_trades
+                    if len(local_trades) == 0 and pos_info.get("contracts", 0) > 0:
+                        entry_p = pos_info["entry_price"]
+                        contracts = pos_info["contracts"]
+                        side = pos_info["side"]
+                        action = "SHORT" if "SHORT" in side.upper() else "LONG"
+                        existing_sl = float(pos_info.get("sl", 0) or 0)
+                        existing_tp = float(pos_info.get("tp", 0) or 0)
 
-                    # Calcular SL/TP dinámicos con ATR
-                    try:
-                        df_atr = api.get_historical_data(sym, config.TIMEFRAME, 100)
-                        if df_atr is not None and len(df_atr) > 14:
-                            import pandas_ta as ta
-                            atr_s = ta.atr(df_atr['high'], df_atr['low'], df_atr['close'], length=14)
-                            atr_val = float(atr_s.iloc[-1]) if atr_s is not None else entry_p * 0.01
+                        if existing_sl > 0:
+                            sl = existing_sl
+                            tp = existing_tp if existing_tp > 0 else (round(entry_p * 0.95, 4) if action == "SHORT" else round(entry_p * 1.05, 4))
+                            logger.info(f"🔒 {sym}: Posición huérfana recuperada con SL existente de Binance ({sl})")
                         else:
-                            atr_val = entry_p * 0.01
-                    except Exception:
-                        atr_val = entry_p * 0.01
+                            # Posición sin SL en Binance: calcular e imponer SL de emergencia de inmediato
+                            try:
+                                df_atr = api.get_historical_data(sym, config.TIMEFRAME, 100)
+                                if df_atr is not None and len(df_atr) > 14:
+                                    import pandas_ta as ta
+                                    atr_s = ta.atr(df_atr['high'], df_atr['low'], df_atr['close'], length=14)
+                                    atr_val = float(atr_s.iloc[-1]) if atr_s is not None else entry_p * 0.01
+                                else:
+                                    atr_val = entry_p * 0.01
+                            except Exception:
+                                atr_val = entry_p * 0.01
 
-                    if action == "SHORT":
-                        sl = round(entry_p + (atr_val * config.ATR_MULTIPLIER), 4)
-                        tp = round(entry_p - (atr_val * config.TP_MULTIPLIER), 4)
-                    else:
-                        sl = round(entry_p - (atr_val * config.ATR_MULTIPLIER), 4)
-                        tp = round(entry_p + (atr_val * config.TP_MULTIPLIER), 4)
+                            if action == "SHORT":
+                                sl = round(entry_p + (atr_val * config.ATR_MULTIPLIER), 4)
+                                tp = round(entry_p - (atr_val * config.TP_MULTIPLIER), 4)
+                            else:
+                                sl = round(entry_p - (atr_val * config.ATR_MULTIPLIER), 4)
+                                tp = round(entry_p + (atr_val * config.TP_MULTIPLIER), 4)
 
-                    trade = {
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "action": action,
-                        "method": "Recuperación Binance",
-                        "entry_price": entry_p,
-                        "size": contracts,
-                        "sl": sl,
-                        "tp": tp,
-                        "use_sl": True,
-                        "order_id": None,
-                        "_features": {},
-                        "is_breakeven": False,
-                        "is_trailing": False,
-                    }
-                    bots[sym]["tr"].active_trades.append(trade)
-                    bots[sym]["tr"]._save_active_trades_to_file()
-                    print(f"🔄 RECUPERADA posición huérfana: {action} {sym} @ {entry_p} | Size: {contracts} | SL: {sl} | TP: {tp}")
-                    nm.add_notification("WARNING", f"Posición Huérfana Recuperada ({sym})",
-                                        f"{action} @ {entry_p} | {contracts} contratos | SL={sl} TP={tp}", sym)
+                            sl_ok = executor.update_position_stop_loss(api, sym, sl, action, contracts)
+                            if not sl_ok:
+                                logger.critical(f"🔥 {sym}: Imposible asegurar SL para posición huérfana en Binance. Cerrando posición por seguridad.")
+                                executor.close_position(api, sym, action, contracts)
+                                continue
+
+                        trade = {
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "action": action,
+                            "method": "Recuperación Binance",
+                            "entry_price": entry_p,
+                            "size": contracts,
+                            "sl": sl,
+                            "tp": tp,
+                            "use_sl": True,
+                            "order_id": "RECOVERY",
+                            "_features": {},
+                            "is_breakeven": False,
+                            "is_trailing": False,
+                        }
+                        bots[sym]["tr"].active_trades.append(trade)
+                        bots[sym]["tr"]._save_active_trades_to_file()
+                        print(f"🔄 RECUPERADA posición huérfana: {action} {sym} @ {entry_p} | Size: {contracts} | SL: {sl} | TP: {tp}")
+                        nm.add_notification("WARNING", f"Posición Huérfana Recuperada ({sym})",
+                                            f"{action} @ {entry_p} | {contracts} contratos | SL={sl} TP={tp}", sym)
         except Exception as e:
             logger.warning(f"Error en auto-recuperación de posiciones: {e}")
 
@@ -319,16 +335,22 @@ def main():
                         if sym not in bots:
                             continue
                         b = bots[sym]
-                        if len(b["tr"].active_trades) > 0:
+                        with b["tr"]._trades_lock:
+                            has_trades = len(b["tr"].active_trades) > 0
+                            entry_p = b["tr"].active_trades[0]['entry_price'] if has_trades else 0
+                        if has_trades:
                             live_1m = stream_manager.get_data(sym, "1m")
-                            close_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else b["tr"].active_trades[0]['entry_price']
+                            close_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else entry_p
                             b["tr"].force_close(close_p, api)
                 elif action == "CLOSE_POSITION" and target_sym:
                     print(f"\n🚨 Cierre manual solicitado desde Dashboard para {target_sym}...")
                     if target_sym in bots:
                         b = bots[target_sym]
+                        with b["tr"]._trades_lock:
+                            has_trades = len(b["tr"].active_trades) > 0
+                            entry_p = b["tr"].active_trades[0]['entry_price'] if has_trades else 0
                         live_1m = stream_manager.get_data(target_sym, "1m")
-                        close_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else (b["tr"].active_trades[0]['entry_price'] if b["tr"].active_trades else 0)
+                        close_p = float(live_1m.iloc[-1]['close']) if (live_1m is not None and not live_1m.empty) else entry_p
                         b["tr"].force_close(close_p, api)
 
                 os.remove(command_file)
@@ -379,7 +401,7 @@ def main():
                                 with b["tr"]._trades_lock:
                                     if t in b["tr"].active_trades:
                                         b["tr"].active_trades.remove(t)
-                            b["tr"]._save_active_trades_to_file()
+                                    b["tr"]._save_active_trades_to_file()
                             nm.add_notification(
                                 "INFO",
                                 f"Posición Sincronizada ({sym})",
@@ -482,12 +504,110 @@ def main():
                             else:
                                 logger.warning(f"⚠️ {sym} Trailing SL NO sincronizado — Binance mantiene SL anterior")
 
-                trades_before = len(b["tr"].active_trades)
-                b["tr"].update_market_price(current_price, is_paper=paper_mode)
-                if len(b["tr"].active_trades) < trades_before:
-                    _, consecutive_losses = b["rm"].get_streak_info()
-                    if consecutive_losses > 0:
-                        b["cooldown_left"] = config.COOLDOWN_CANDLES
+                # Auto-corregir TP en memoria activa si está invertido o desactualizado
+                for t_act in b["tr"].active_trades:
+                    entry_ref = float(t_act.get('entry_price', 0) or 0)
+                    act_ref = t_act.get('action', 'LONG')
+                    tp_ref = float(t_act.get('tp', 0) or 0)
+                    if entry_ref > 0:
+                        if act_ref == 'SHORT' and (tp_ref <= 0 or tp_ref >= entry_ref):
+                            t_act['tp'] = round(entry_ref * 0.95, 4)
+                            b["tr"]._save_active_trades_to_file()
+                        elif act_ref == 'LONG' and (tp_ref <= 0 or tp_ref <= entry_ref):
+                            t_act['tp'] = round(entry_ref * 1.05, 4)
+                            b["tr"]._save_active_trades_to_file()
+
+                # ── Auditar y Reconciliar estado con Binance en Modo Real ─────
+                if not paper_mode:
+                    loc_trade = b["tr"].active_trades[0] if len(b["tr"].active_trades) > 0 else None
+                    rec_result = position_reconciler.reconcile_symbol(api, sym, loc_trade)
+                    if not rec_result['is_synced']:
+                        act = rec_result['action']
+                        rem = rec_result.get('remote_pos')
+
+                        if act == 'CLOSE_LOCAL':
+                            logger.warning(f"⚠️ Reconciliador: {sym} fue cerrada en Binance. Limpiando trade local.")
+                            margin_to_release = (loc_trade['size'] * loc_trade['entry_price']) / config.LEVERAGE if loc_trade else 0
+                            api.release_margin(margin_to_release)
+                            with b["tr"]._trades_lock:
+                                b["tr"].active_trades.clear()
+                                b["tr"]._save_active_trades_to_file()
+                        elif rem and loc_trade:
+                            # Sincronizar primero tamaño real y precio de entrada real de Binance
+                            loc_trade['entry_price'] = rem['entry_price']
+                            loc_trade['size'] = rem['contracts']
+
+                            if float(rem.get('sl', 0) or 0) > 0:
+                                loc_trade['sl'] = float(rem['sl'])
+                            else:
+                                # Binance sin SL: calcular e imponer SL sobre el tamaño y precio reales de Binance
+                                atr_val = atr_current if atr_current > 0 else rem['entry_price'] * 0.01
+                                action_trade = loc_trade['action']
+                                if action_trade == 'SHORT':
+                                    calc_sl = round(rem['entry_price'] + (atr_val * config.ATR_MULTIPLIER), 4)
+                                else:
+                                    calc_sl = round(rem['entry_price'] - (atr_val * config.ATR_MULTIPLIER), 4)
+
+                                sl_ok = executor.update_position_stop_loss(api, sym, calc_sl, action_trade, rem['contracts'])
+                                if sl_ok:
+                                    loc_trade['sl'] = calc_sl
+
+                            if float(rem.get('tp', 0) or 0) > 0:
+                                loc_trade['tp'] = float(rem['tp'])
+                            else:
+                                entry_ref = loc_trade['entry_price']
+                                act_ref = loc_trade['action']
+                                calc_tp = round(entry_ref * 0.95, 4) if act_ref == 'SHORT' else round(entry_ref * 1.05, 4)
+                                tp_ok = executor.update_position_take_profit(api, sym, calc_tp, act_ref, rem['contracts'])
+                                if tp_ok:
+                                    loc_trade['tp'] = calc_tp
+
+                            b["tr"]._save_active_trades_to_file()
+                        elif rem and not loc_trade:
+                            # Reconstruir posición activa local a partir de la posición real existente en Binance
+                            action_side = rem['side']
+                            entry_p = rem['entry_price']
+                            contracts_size = rem['contracts']
+
+                            atr_val = atr_current if atr_current > 0 else entry_p * 0.01
+                            calc_sl = rem.get('sl', 0.0)
+                            if not calc_sl or calc_sl == 0.0:
+                                if action_side == 'SHORT':
+                                    calc_sl = round(entry_p + (atr_val * config.ATR_MULTIPLIER), 4)
+                                else:
+                                    calc_sl = round(entry_p - (atr_val * config.ATR_MULTIPLIER), 4)
+                                executor.update_position_stop_loss(api, sym, calc_sl, action_side, contracts_size)
+
+                            calc_tp = rem.get('tp', 0.0)
+                            if not calc_tp or calc_tp == 0.0:
+                                if action_side == 'SHORT':
+                                    calc_tp = round(entry_p - (atr_val * config.ATR_MULTIPLIER * 2.0), 4)
+                                else:
+                                    calc_tp = round(entry_p + (atr_val * config.ATR_MULTIPLIER * 2.0), 4)
+
+                            rebuilt_trade = {
+                                'symbol': sym,
+                                'action': action_side,
+                                'entry_price': entry_p,
+                                'size': contracts_size,
+                                'sl': calc_sl,
+                                'tp': calc_tp,
+                                'use_sl': True,
+                                'method': 'RECONCILED',
+                                'is_breakeven': False,
+                                'is_trailing': False,
+                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                '_features': last_row if 'last_row' in locals() and last_row else {},
+                                'order_id': 'RECONCILED',
+                                'current_pnl': 0.0,
+                                'current_price': entry_p,
+                            }
+
+                            with b["tr"]._trades_lock:
+                                b["tr"].active_trades.append(rebuilt_trade)
+                                b["tr"]._save_active_trades_to_file()
+
+                            logger.info(f"✅ {sym} Reconstruido exitosamente en memoria local: {rebuilt_trade}")
 
                 total, wins, losses, wr, pnl = b["tr"].get_dashboard_stats()
 
@@ -517,76 +637,96 @@ def main():
                 }
 
                 # ── Scale-In Inteligente (DCA) ─────────────────────────────────
-                if 0 < len(active_trades_snapshot) < config.MAX_BULLETS:
-                    t_ref = active_trades_snapshot[0]
-                    dca_levels = b["rm"].calculate_averaging_levels(
-                        t_ref["entry_price"], atr_current, t_ref["action"]
-                    )
-                    next_idx = len(active_trades_snapshot) - 1
-                    if next_idx < len(dca_levels):
-                        target_price = dca_levels[next_idx]
-                        is_hit = (
-                            t_ref["action"] == "LONG" and current_price <= target_price
-                        ) or (
-                            t_ref["action"] == "SHORT" and current_price >= target_price
-                        )
-                        
-                        ai_agrees = (t_ref["action"] == "LONG" and action_code == 1) or \
-                                    (t_ref["action"] == "SHORT" and action_code == 0)
-
-                        if is_hit:
-                            if ai_agrees:
-                                print(f"   🎯 {sym} SCALE-IN @ {current_price} | Confirmado por IA")
-                                # MEJORA DE RIESGO: Argumentos explícitos por clave para el dimensionamiento adaptativo exacto
-                                size = b["rm"].calculate_position_size(
-                                    account_balance=account_balance,
-                                    entry_price=current_price,
-                                    stop_loss_price=(
-                                        t_ref["sl"] if t_ref.get("use_sl") else None
-                                    ),
-                                    current_balance=account_balance,
+                if not b["rm"].is_kill_switch_triggered(account_balance):
+                    if 0 < len(active_trades_snapshot) < config.MAX_BULLETS:
+                        t_ref = active_trades_snapshot[0]
+                        dca_cooldown_sec = getattr(config, 'DCA_COOLDOWN_MINUTES', 15) * 60.0
+                        last_dca_time = t_ref.get('last_dca_timestamp', 0)
+                        now_sec = time.time()
+    
+                        if last_dca_time > 0 and (now_sec - last_dca_time) < dca_cooldown_sec:
+                            mins_left = int((dca_cooldown_sec - (now_sec - last_dca_time)) / 60.0) + 1
+                            # Cooldown activo por tiempo entre escalados
+                            pass
+                        else:
+                            dca_levels = b["rm"].calculate_averaging_levels(
+                                t_ref["entry_price"], atr_current, t_ref["action"]
+                            )
+                            next_idx = len(active_trades_snapshot) - 1
+                            if next_idx < len(dca_levels):
+                                target_price = dca_levels[next_idx]
+                                is_hit = (
+                                    t_ref["action"] == "LONG" and current_price <= target_price
+                                ) or (
+                                    t_ref["action"] == "SHORT" and current_price >= target_price
                                 )
-                                if size > 0:
-                                    margin_needed = (size * current_price) / config.LEVERAGE
-                                    if margin_needed <= available_margin:
-                                        dca_order_id = 'PAPER'
-                                        if not paper_mode:
-                                            dca_result = executor.execute_trade(
-                                                client=api,
-                                                symbol=sym,
-                                                action=t_ref["action"],
-                                                size=size,
-                                                sl=t_ref["sl"],
-                                                tp=t_ref["tp"],
-                                                signal_price=current_price,
-                                            )
-                                            if not dca_result:
-                                                logger.error(f"❌ DCA falló en Binance para {sym}")
-                                                continue
-                                            dca_order_id = str(dca_result.get('id', 'OK'))
-                                        api.occupy_margin(margin_needed)
-                                        b["tr"].register_trade(
-                                            t_ref["action"],
-                                            current_price,
-                                            size,
-                                            t_ref["sl"],
-                                            t_ref["tp"],
-                                            last_row,
-                                            t_ref.get("use_sl", True),
-                                            method="DCA SCALE-IN",
-                                            order_id=dca_order_id,
+    
+                                ai_agrees = (t_ref["action"] == "LONG" and action_code == 1) or \
+                                            (t_ref["action"] == "SHORT" and action_code == 0)
+    
+                                if is_hit:
+                                    if ai_agrees:
+                                        print(f"   🎯 {sym} SCALE-IN @ {current_price} | Confirmado por IA (Cooldown libre)")
+                                        t_ref['last_dca_timestamp'] = now_sec
+                                        # MEJORA DE RIESGO: Argumentos explícitos por clave para el dimensionamiento adaptativo exacto
+                                        size = b["rm"].calculate_position_size(
+                                            account_balance=account_balance,
+                                            entry_price=current_price,
+                                            stop_loss_price=(
+                                                t_ref["sl"] if t_ref.get("use_sl") else None
+                                            ),
+                                            current_balance=account_balance,
                                         )
-                            else:
-                                print(f"   ⏳ {sym} Nivel DCA alcanzado, esperando confirmación técnica...")
+                                        if size > 0:
+                                            margin_needed = (size * current_price) / config.LEVERAGE
+                                            if margin_needed <= available_margin:
+                                                dca_order_id = 'PAPER'
+                                                if not paper_mode:
+                                                    dca_result = executor.execute_trade(
+                                                        client=api,
+                                                        symbol=sym,
+                                                        action=t_ref["action"],
+                                                        size=size,
+                                                        sl=t_ref["sl"],
+                                                        tp=t_ref["tp"],
+                                                        signal_price=current_price,
+                                                    )
+                                                    if not dca_result:
+                                                        logger.error(f"❌ DCA falló en Binance para {sym}")
+                                                        continue
+                                                    dca_order_id = str(dca_result.get('id', 'OK'))
+                                                api.occupy_margin(margin_needed)
+                                                b["tr"].register_trade(
+                                                    t_ref["action"],
+                                                    current_price,
+                                                    size,
+                                                    t_ref["sl"],
+                                                    t_ref["tp"],
+                                                    last_row,
+                                                    t_ref.get("use_sl", True),
+                                                    method="DCA SCALE-IN",
+                                                    order_id=dca_order_id,
+                                                )
+                                else:
+                                    print(f"   ⏳ {sym} Nivel DCA alcanzado, esperando confirmación técnica...")
 
-                # Señal ya calculada arriba para uso conjunto con el DCA
+                # Verificación de datos frescos (Stream no congelado)
+                is_fresh = stream_manager.is_data_fresh(sym, config.TIMEFRAME, max_age_seconds=180)
+                if not is_fresh:
+                    logger.warning(f"⚠️ Datos congelados o desactualizados en Stream para {sym}. Señal suspendida.")
 
-                can_trade = (
-                    action_code is not None
-                    and confidence > config.MIN_CONFIDENCE
-                    and len(b["tr"].active_trades) == 0
-                    and b["cooldown_left"] == 0
-                )
+                # Verificación de Account Kill Switch por Max Drawdown
+                if b["rm"].is_kill_switch_triggered(account_balance):
+                    logger.critical(f"🚨 KILL SWITCH ACTIVADO para {sym}. Suspendiendo nuevas entradas.")
+                    can_trade = False
+                else:
+                    can_trade = (
+                        action_code is not None
+                        and confidence > config.MIN_CONFIDENCE
+                        and len(b["tr"].active_trades) == 0
+                        and b["cooldown_left"] == 0
+                        and is_fresh
+                    )
 
                 if can_trade:
                     action_str = "LONG" if action_code == 1 else "SHORT"
@@ -607,40 +747,51 @@ def main():
                     if size > 0:
                         margin_needed = (size * current_price) / config.LEVERAGE
                         if margin_needed <= available_margin:
-                            api.occupy_margin(margin_needed)
-                            print(
-                                f"   🧠 SEÑAL: {action_str} | {method_name.upper()} | conf: {confidence:.2%} | size: {size}"
-                            )
+                            # ── Guard Anti-Doble Entrada en Modo Real ─────────────────
+                            if not paper_mode:
+                                try:
+                                    real_poss = api.get_open_positions()
+                                    if real_poss and (real_poss.get(sym, {}).get('contracts', 0) > 0 or real_poss.get(sym + ':USDT', {}).get('contracts', 0) > 0):
+                                        logger.warning(f"⚠️ Guard Anti-Doble Entrada: Posición real ya existe en Binance para {sym}. Entrada abortada.")
+                                        can_trade = False
+                                except Exception as guard_err:
+                                    logger.error(f"Error consultando posiciones en Binance para Guard Anti-Doble Entrada: {guard_err}")
 
-                            # ── Ejecución real en Binance ─────────────────────────────
-                            result = executor.execute_trade(
-                                client=api,
-                                symbol=sym,
-                                action=action_str,
-                                size=size,
-                                sl=sl if use_sl else None,
-                                tp=tp,
-                                signal_price=current_price,
-                            )
-                            if result:
-                                real_order_id = str(result.get('id', 'OK'))
-                                if not result.get('sl_placed') and use_sl and sl is not None:
-                                    logger.error(f"🚨 ENTRADA OK pero SL FALLÓ para {sym} — posición cerrada por seguridad")
-                                if not result.get('tp_placed') and tp is not None:
-                                    logger.warning(f"⚠️ ENTRADA OK pero TP FALLÓ para {sym}")
-                                b["tr"].register_trade(
-                                    action_str,
-                                    current_price,
-                                    size,
-                                    result.get('sl_price', sl),
-                                    result.get('tp_price', tp),
-                                    last_row,
-                                    use_sl,
-                                    method=method_name.upper() if method_name else "CONSENSO IA",
-                                    order_id=real_order_id,
+                            if can_trade:
+                                api.occupy_margin(margin_needed)
+                                print(
+                                    f"   🧠 SEÑAL: {action_str} | {method_name.upper()} | conf: {confidence:.2%} | size: {size}"
                                 )
-                            else:
-                                api.release_margin(margin_needed)
+    
+                                # ── Ejecución real en Binance ─────────────────────────────
+                                result = executor.execute_trade(
+                                    client=api,
+                                    symbol=sym,
+                                    action=action_str,
+                                    size=size,
+                                    sl=sl if use_sl else None,
+                                    tp=tp,
+                                    signal_price=current_price,
+                                )
+                                if result:
+                                    real_order_id = str(result.get('id', 'OK'))
+                                    if not result.get('sl_placed') and use_sl and sl is not None:
+                                        logger.error(f"🚨 ENTRADA OK pero SL FALLÓ para {sym} — posición cerrada por seguridad")
+                                    if not result.get('tp_placed') and tp is not None:
+                                        logger.warning(f"⚠️ ENTRADA OK pero TP FALLÓ para {sym}")
+                                    b["tr"].register_trade(
+                                        action_str,
+                                        current_price,
+                                        size,
+                                        result.get('sl_price', sl),
+                                        result.get('tp_price', tp),
+                                        last_row,
+                                        use_sl,
+                                        method=method_name.upper() if method_name else "CONSENSO IA",
+                                        order_id=real_order_id,
+                                    )
+                                else:
+                                    api.release_margin(margin_needed)
                         else:
                             logger.warning(
                                 f"⚠️ Margen insuficiente para {sym}. Requerido: {margin_needed:.2f}"

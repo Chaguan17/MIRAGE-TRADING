@@ -49,7 +49,8 @@ export default function HistoryTable({
   availablePairs,
   historyLimit,
   setHistoryLimit,
-  filteredHistory
+  filteredHistory,
+  leverage: configLeverage,
 }) {
   const [expandedId, setExpandedId] = useState(null);
 
@@ -75,7 +76,7 @@ export default function HistoryTable({
             onChange={(e) => setHistoryFilter(e.target.value)}
           >
             <option value="ALL" style={{ background: "#0b1120", color: "#f8fafc" }}>Todos los Pares</option>
-            {availablePairs.map((pair) => (
+            {(availablePairs || []).map((pair) => (
               <option key={pair} value={pair} style={{ background: "#0b1120", color: "#f8fafc" }}>
                 {pair.replace("USDT", "/USDT")}
               </option>
@@ -108,14 +109,14 @@ export default function HistoryTable({
             const entryPrice = parseFloat(op.entry_price || 0);
             const closePrice = parseFloat(op.close_price || entryPrice);
             const sizeVal = parseFloat(op.size || 0);
-            const leverage = asset === "XRP" ? 20 : 10;
+            const tradeLeverage = op.leverage || configLeverage || 10;
             const isReal = op.is_paper === "REAL" || (op.order_id && String(op.order_id) !== "0" && String(op.order_id) !== "OK" && String(op.order_id) !== "NONE" && String(op.order_id) !== "PAPER");
 
             // ROI % calculation
             let roiPct = 0;
             if (entryPrice > 0) {
               const pnlPriceDiff = isShort ? (entryPrice - closePrice) : (closePrice - entryPrice);
-              roiPct = (pnlPriceDiff / entryPrice) * leverage * 100;
+              roiPct = (pnlPriceDiff / entryPrice) * tradeLeverage * 100;
             }
 
             const pnlColor = netPnl > 0 ? "#00ffaa" : netPnl < 0 ? "#ff3b69" : "#f8fafc";
@@ -169,7 +170,7 @@ export default function HistoryTable({
                     </span>
 
                     <span style={{ background: "rgba(30, 41, 59, 0.8)", color: "#94a3b8", padding: "2px 6px", borderRadius: "4px", fontSize: "0.68rem", fontWeight: "700" }}>
-                      {leverage}x
+                      {tradeLeverage}x
                     </span>
 
                     <span style={{
