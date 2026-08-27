@@ -17,13 +17,22 @@ dist/
 build/
 
 # ── Runtime data ─────────────────────────────────────────
-backend/storage/
-backend/logs/
+[bB]ackend/storage/
+[bB]ackend/logs/
+storage/
+logs/
 *.pkl
+*.pkl.*
+*.db
+*.sqlite
+*.sqlite3
 trade_history.csv
 
 # ── Node ─────────────────────────────────────────────────
 node_modules/
+**/node_modules/
+dev-dist/
+**/dev-dist/
 
 # ── IDE ──────────────────────────────────────────────────
 .vscode/
