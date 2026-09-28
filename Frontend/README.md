@@ -11,6 +11,10 @@ Este es el frontend interactivo para el monitoreo y control en tiempo real del b
 3. **Control Bidireccional:** Botón de "Panic Sell" para liquidar posiciones abiertas inmediatamente y frenar la operativa del bot.
 4. **Configuración en Vivo (Glassmorphic Settings):** Interfaz limpia y moderna para encender/apagar estrategias, ajustar el riesgo por operación, apalancamiento, DCA y stops dinámicos sin tocar código en el servidor.
 
+### Porcentajes de configuración
+
+La interfaz muestra los porcentajes en escala humana (por ejemplo, `0,5 %`) y los convierte a fracciones decimales antes de enviarlos al API (`0.005`). El API y `settings.json` usan siempre esa fracción decimal; no se deben enviar valores como `0.5` para representar `0,5 %`. Los campos de porcentaje fuera de su rango se rechazan. Además, `ADAPTIVE_RISK_FLOOR` no puede superar `ADAPTIVE_RISK_CEIL`.
+
 ---
 
 ## 🛠️ Instalación y Configuración

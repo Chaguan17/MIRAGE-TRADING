@@ -1,10 +1,6 @@
-"""
-risk_manager.py — Mirage Trading
-Gestión de riesgo ADAPTATIVA al capital disponible.
-
-Objetivo: el bot ajusta el riesgo solo, sin intervención humana,
-en función de su balance real vs balance inicial.
-"""
+import os
+import json
+import time
 import logging
 import config
 
@@ -18,9 +14,35 @@ class RiskManager:
         self._consecutive_wins   = 0
         self._consecutive_losses = 0
         self._martingale_step    = 0
-        # Referencia de capital inicial y pico histórico (High-Water Mark)
+        # Referencia de capital inicial y pico histórico (High-Water Mark persistente)
         self._initial_balance    = initial_balance or config.PAPER_BALANCE
-        self._high_water_mark    = self._initial_balance
+        self._hwm_file           = os.path.join(config.STORAGE_DIR, "hwm_state.json")
+        self._high_water_mark    = self._load_high_water_mark()
+
+    def _load_high_water_mark(self) -> float:
+        try:
+            if os.path.exists(self._hwm_file):
+                with open(self._hwm_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    saved_hwm = float(data.get("high_water_mark", 0.0))
+                    if saved_hwm > self._initial_balance:
+                        logger.info(f"💾 High-Water Mark recuperado de disco: ${saved_hwm:.2f}")
+                        return saved_hwm
+        except Exception as e:
+            logger.warning(f"No se pudo cargar High-Water Mark previo: {e}")
+        return self._initial_balance
+
+    def _save_high_water_mark(self):
+        try:
+            os.makedirs(config.STORAGE_DIR, exist_ok=True)
+            with open(self._hwm_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "high_water_mark": self._high_water_mark,
+                    "initial_balance": self._initial_balance,
+                    "updated_at": time.time()
+                }, f, indent=4)
+        except Exception as e:
+            logger.error(f"Error guardando High-Water Mark: {e}")
 
     # ─── Sistema adaptativo ──────────────────────────────────────────────────
 
@@ -28,7 +50,7 @@ class RiskManager:
         """
         Ajusta el riesgo base en función del balance actual vs el pico histórico (High-Water Mark).
 
-        - Actualiza constantemente el pico de equidad (_high_water_mark).
+        - Actualiza constantemente el pico de equidad (_high_water_mark) y lo persiste.
         - Si el balance cae por debajo del ADAPTIVE_DRAWDOWN_FLOOR relativo al pico → reduce riesgo para proteger ganancias acumuladas.
         - Si el balance alcanza un nuevo récord → escala el riesgo conservadoramente.
         """
@@ -38,6 +60,7 @@ class RiskManager:
         # Actualizar el pico histórico de balance (High-Water Mark)
         if current_balance > self._high_water_mark:
             self._high_water_mark = current_balance
+            self._save_high_water_mark()
 
         # Calcular el ratio respecto al pico histórico de la cuenta
         ratio = current_balance / (self._high_water_mark + 1e-9)

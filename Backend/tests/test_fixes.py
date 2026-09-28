@@ -142,7 +142,7 @@ def test_update_config_strategies():
         payload = ConfigUpdate(
             STRATEGY_TREND=False,
             STRATEGY_SMC=False,
-            VETO_CRASH_PCT=10.0,  # 10%
+            VETO_CRASH_PCT=0.1,  # 10% en escala decimal
         )
         
         # 2. Llamar a update_config directamente
@@ -162,6 +162,115 @@ def test_update_config_strategies():
         if original_settings:
             with open(cfg.SETTINGS_PATH, "w", encoding="utf-8") as f:
                 json.dump(original_settings, f, indent=4)
+
+
+def test_percentage_config_requires_decimal_scale():
+    """Los porcentajes del API usan fracciones decimales, no números enteros de porcentaje."""
+    from pydantic import ValidationError
+    from api import ConfigUpdate
+
+    payload = ConfigUpdate(
+        ADAPTIVE_RISK_FLOOR=0.005,
+        ADAPTIVE_RISK_CEIL=0.03,
+        ADAPTIVE_DRAWDOWN_FLOOR=0.85,
+        VETO_CRASH_PCT=0.01,
+    )
+
+    assert payload.ADAPTIVE_RISK_FLOOR == 0.005
+    assert payload.VETO_CRASH_PCT == 0.01
+
+    with pytest.raises(ValidationError):
+        ConfigUpdate(ADAPTIVE_RISK_FLOOR=0.5)
+
+
+def test_update_config_rejects_adaptive_floor_above_ceil(tmp_path, monkeypatch):
+    """El mínimo adaptativo no puede superar el máximo, incluso al actualizar un único campo."""
+    from fastapi import HTTPException
+    from api import ConfigUpdate, update_config
+    import config as cfg
+    import json
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"ADAPTIVE_RISK_FLOOR": 0.005, "ADAPTIVE_RISK_CEIL": 0.03}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cfg, "SETTINGS_PATH", str(settings_path))
+
+    with pytest.raises(HTTPException, match="ADAPTIVE_RISK_FLOOR"):
+        update_config(ConfigUpdate(ADAPTIVE_RISK_FLOOR=0.04))
+
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+        "ADAPTIVE_RISK_FLOOR": 0.005,
+        "ADAPTIVE_RISK_CEIL": 0.03,
+    }
+
+
+def test_parameter_metadata_includes_adaptive_percentage_fields():
+    """Los metadatos del frontend publican los cuatro controles en escala decimal."""
+    from api import get_parameters_metadata
+    import config as cfg
+
+    metadata = get_parameters_metadata()
+
+    expected_ranges = {
+        "ADAPTIVE_RISK_FLOOR": (0.001, 0.05),
+        "ADAPTIVE_RISK_CEIL": (0.005, 0.15),
+        "ADAPTIVE_DRAWDOWN_FLOOR": (0.5, 0.99),
+        "VETO_CRASH_PCT": (0.01, 0.3),
+    }
+    for name, (minimum, maximum) in expected_ranges.items():
+        assert metadata[name]["isPercentage"] is True
+        assert metadata[name]["min"] == minimum
+        assert metadata[name]["max"] == maximum
+
+
+def test_runtime_metadata_cannot_override_adaptive_percentage_scale(tmp_path, monkeypatch):
+    """Los metadatos runtime conservan textos propios, pero no alteran escala ni límites."""
+    from api import get_parameters_metadata
+    import config as cfg
+    import json
+
+    runtime_metadata_path = tmp_path / "parameters_metadata.json"
+    runtime_metadata_path.write_text(
+        json.dumps({
+            "ADAPTIVE_RISK_FLOOR": {
+                "label": "Riesgo mínimo personalizado",
+                "isPercentage": False,
+                "min": 0,
+                "max": 100,
+                "step": 1,
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cfg, "METADATA_PATH", str(runtime_metadata_path))
+
+    field = get_parameters_metadata()["ADAPTIVE_RISK_FLOOR"]
+
+    assert field["label"] == "Riesgo mínimo personalizado"
+    assert field["isPercentage"] is True
+    assert field["min"] == 0.001
+    assert field["max"] == 0.05
+    assert field["step"] == 0.001
+
+
+def test_get_config_includes_adaptive_defaults_when_unset(tmp_path, monkeypatch):
+    """El frontend recibe valores actuales seguros aunque no existan en settings.json."""
+    from api import get_config
+    import config as cfg
+    import json
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"LEVERAGE": 5}), encoding="utf-8")
+    monkeypatch.setattr(cfg, "SETTINGS_PATH", str(settings_path))
+
+    current = get_config()
+
+    assert current["ADAPTIVE_RISK_FLOOR"] == cfg.ADAPTIVE_RISK_FLOOR
+    assert current["ADAPTIVE_RISK_CEIL"] == cfg.ADAPTIVE_RISK_CEIL
+    assert current["ADAPTIVE_DRAWDOWN_FLOOR"] == cfg.ADAPTIVE_DRAWDOWN_FLOOR
+    assert current["VETO_CRASH_PCT"] == cfg.VETO_CRASH_PCT
 
 
 def test_trailing_stop_profit_is_win():

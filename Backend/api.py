@@ -1,6 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 import pandas as pd
 import json
 import os
@@ -552,21 +552,53 @@ def get_chart_data(symbol: str, tf: str = None, _ = Depends(verify_auth)):
 
 @app.get("/api/parameters")
 def get_parameters_metadata():
+	bundled_metadata = {}
+	try:
+		with open(os.path.join(cfg.BASE_DIR, "parameters_metadata.json"), "r", encoding="utf-8") as f:
+			bundled_metadata = json.load(f)
+	except FileNotFoundError:
+		logger.error("Bundled parameters_metadata.json not found")
+	except json.JSONDecodeError as e:
+		logger.error(f"Invalid bundled parameters_metadata.json: {e}")
+
+	metadata = bundled_metadata.copy()
 	try:
 		with open(cfg.METADATA_PATH, "r", encoding="utf-8") as f:
-			return json.load(f)
+			runtime_metadata = json.load(f)
+			for name, value in runtime_metadata.items():
+				if isinstance(metadata.get(name), dict) and isinstance(value, dict):
+					metadata[name] = {**metadata[name], **value}
+				else:
+					metadata[name] = value
 	except FileNotFoundError:
-		logger.error("parameters_metadata.json not found")
-		return {}
+		pass
 	except json.JSONDecodeError as e:
-		logger.error(f"Invalid JSON in parameters_metadata.json: {e}")
-		return {}
+		logger.error(f"Invalid runtime parameters_metadata.json: {e}")
+
+	for name in (
+		"ADAPTIVE_RISK_FLOOR",
+		"ADAPTIVE_RISK_CEIL",
+		"ADAPTIVE_DRAWDOWN_FLOOR",
+		"VETO_CRASH_PCT",
+	):
+		bundled = bundled_metadata.get(name, {})
+		if isinstance(metadata.get(name), dict) and isinstance(bundled, dict):
+			metadata[name].update(
+				{key: bundled[key] for key in ("isPercentage", "min", "max", "step", "unit") if key in bundled}
+			)
+
+	return metadata
 
 @app.get("/api/config")
 def get_config(_ = Depends(verify_auth)):
 	try:
 		with open(cfg.SETTINGS_PATH, "r", encoding="utf-8") as f:
-			return sanitize_config(json.load(f))
+			current = json.load(f)
+			current.setdefault("ADAPTIVE_RISK_FLOOR", cfg.ADAPTIVE_RISK_FLOOR)
+			current.setdefault("ADAPTIVE_RISK_CEIL", cfg.ADAPTIVE_RISK_CEIL)
+			current.setdefault("ADAPTIVE_DRAWDOWN_FLOOR", cfg.ADAPTIVE_DRAWDOWN_FLOOR)
+			current.setdefault("VETO_CRASH_PCT", cfg.VETO_CRASH_PCT)
+			return sanitize_config(current)
 	except FileNotFoundError:
 		logger.error(f"Config file not found at {cfg.SETTINGS_PATH}")
 		return {}
@@ -606,9 +638,24 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	RISK_INCREASE_FACTOR: float | None = None
 	RISK_REDUCTION_FACTOR: float | None = None
 	ADAPTIVE_RISK_ENABLED: bool | None = None
-	ADAPTIVE_RISK_FLOOR: float | None = Field(None, ge=0)
-	ADAPTIVE_RISK_CEIL: float | None = Field(None, ge=0)
-	ADAPTIVE_DRAWDOWN_FLOOR: float | None = Field(None, ge=0)
+	ADAPTIVE_RISK_FLOOR: float | None = Field(
+		None,
+		ge=cfg.PERCENTAGE_FIELDS["ADAPTIVE_RISK_FLOOR"][0],
+		le=cfg.PERCENTAGE_FIELDS["ADAPTIVE_RISK_FLOOR"][1],
+		description="Decimal fraction (for example, 0.005 for 0.5%)",
+	)
+	ADAPTIVE_RISK_CEIL: float | None = Field(
+		None,
+		ge=cfg.PERCENTAGE_FIELDS["ADAPTIVE_RISK_CEIL"][0],
+		le=cfg.PERCENTAGE_FIELDS["ADAPTIVE_RISK_CEIL"][1],
+		description="Decimal fraction (for example, 0.03 for 3%)",
+	)
+	ADAPTIVE_DRAWDOWN_FLOOR: float | None = Field(
+		None,
+		ge=cfg.PERCENTAGE_FIELDS["ADAPTIVE_DRAWDOWN_FLOOR"][0],
+		le=cfg.PERCENTAGE_FIELDS["ADAPTIVE_DRAWDOWN_FLOOR"][1],
+		description="Decimal fraction (for example, 0.85 for 85%)",
+	)
 	ADAPTIVE_GROWTH_CEIL: float | None = Field(None, ge=0)
 	DCA_ATR_MULT_1: float | None = Field(None, ge=0)
 	DCA_ATR_MULT_2: float | None = Field(None, ge=0)
@@ -618,7 +665,12 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	# Parámetros adicionales y de análisis
 	TRAILING_ATR_MULTIPLIER: float | None = Field(None, ge=0)
 	USE_LIMIT_ORDERS: bool | None = None
-	VETO_CRASH_PCT: float | None = Field(None, ge=0, le=100)
+	VETO_CRASH_PCT: float | None = Field(
+		None,
+		ge=cfg.PERCENTAGE_FIELDS["VETO_CRASH_PCT"][0],
+		le=cfg.PERCENTAGE_FIELDS["VETO_CRASH_PCT"][1],
+		description="Decimal fraction (for example, 0.08 for 8%)",
+	)
 	GLOBAL_RSI_OB_BASE: float | None = Field(None, ge=0)
 	GLOBAL_RSI_OS_BASE: float | None = Field(None, ge=0)
 	MAX_DRAWDOWN_HALT_PCT: float | None = Field(None, ge=0, le=100)
@@ -641,6 +693,17 @@ class ConfigUpdate(BaseModel): # Modificado: Rangos más amplios para evitar err
 	STRATEGY_WYCKOFF: bool | None = None
 	STRATEGY_BTC_CORR: bool | None = None
 
+	@model_validator(mode="after")
+	def validate_percentage_values(self):
+		for name, (minimum, maximum) in cfg.PERCENTAGE_FIELDS.items():
+			value = getattr(self, name, None)
+			if value is not None and not minimum <= value <= maximum:
+				raise ValueError(
+					f"{name} must be between {minimum} and {maximum} as a decimal "
+					"(for example, 0.005 for 0.5%)"
+				)
+		return self
+
 @app.post("/api/config") # Modificado: Usa el modelo ConfigUpdate para validación
 def update_config(new_settings: ConfigUpdate, _ = Depends(verify_auth)): 
 	logger.info(f"Recibida actualización de config: {new_settings}")
@@ -652,33 +715,25 @@ def update_config(new_settings: ConfigUpdate, _ = Depends(verify_auth)):
 	
 	validated = new_settings.model_dump(exclude_none=True)
 	
-	percentage_fields = [
-		"RISK_PER_TRADE",
-		"MAX_RISK_CAP",
-		"MIN_CONFIDENCE",
-		"TRAILING_STOP_ACTIVATION",
-		"TRAILING_STOP_DISTANCE",
-		"BREAKEVEN_ACTIVATION",
-		"ADAPTIVE_RISK_FLOOR",
-		"ADAPTIVE_RISK_CEIL",
-		"ADAPTIVE_DRAWDOWN_FLOOR",
-		"MAX_DRAWDOWN_HALT_PCT",
-		"VETO_CRASH_PCT",
-		"NO_SL_SIZE_PCT",
-		"SMC_OB_STRENGTH",
-		"LIQ_CLUSTER_PCT",
-	]
-	
-	for field in percentage_fields:
+	for field in cfg.PERCENTAGE_FIELDS:
 		if field in validated:
-			value = validated[field]
-			if value >= 1:
-				validated[field] = value / 100.0
+			validated[field] = cfg.validate_percentage(field, validated[field])
+
+	if "LEVERAGE" in validated:
+		validated["LEVERAGE"] = cfg.clamp_leverage(validated["LEVERAGE"])
 	
 	if "PARES_ACTIVOS" in validated and isinstance(validated["PARES_ACTIVOS"], list):
 		validated["PARES_ACTIVOS"] = [str(p).strip().upper() for p in validated["PARES_ACTIVOS"]]
 
 	merged = {**current, **validated}
+	risk_floor = float(merged.get("ADAPTIVE_RISK_FLOOR", cfg.ADAPTIVE_RISK_FLOOR))
+	risk_ceil = float(merged.get("ADAPTIVE_RISK_CEIL", cfg.ADAPTIVE_RISK_CEIL))
+	if risk_floor > risk_ceil:
+		raise HTTPException(
+			status_code=422,
+			detail="ADAPTIVE_RISK_FLOOR must be less than or equal to ADAPTIVE_RISK_CEIL",
+		)
+
 	with open(cfg.SETTINGS_PATH, "w", encoding="utf-8") as f:
 		json.dump(merged, f, indent=4)
 

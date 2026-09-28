@@ -122,6 +122,10 @@ PERCENTAGE_FIELDS = {
     "SMC_OB_STRENGTH":         (0.001, 0.05),
     "LIQ_CLUSTER_PCT":         (0.0005, 0.02),
     "NO_SL_SIZE_PCT":          (0.01,  0.25),
+    "ADAPTIVE_RISK_FLOOR":     (0.001, 0.05),
+    "ADAPTIVE_RISK_CEIL":      (0.005, 0.15),
+    "ADAPTIVE_DRAWDOWN_FLOOR": (0.50,  0.99),
+    "VETO_CRASH_PCT":          (0.01,  0.30),
 }
 
 def validate_percentage(name: str, value: float) -> float:
@@ -218,7 +222,10 @@ BREAKEVEN_ACTIVATION = validate_percentage(
 )
 
 # Filtros Macro (Veto Engine)
-VETO_CRASH_PCT = float(dyn.get("VETO_CRASH_PCT", 0.08))  # 8% caída en 1H
+VETO_CRASH_PCT = validate_percentage(
+    "VETO_CRASH_PCT",
+    normalize_percentage(float(dyn.get("VETO_CRASH_PCT", 0.08)), "VETO_CRASH_PCT")
+)
 
 
 # Ajuste dinámico TP/SL por volatilidad
@@ -309,7 +316,7 @@ SESSION_WEIGHTS = dyn.get("SESSION_WEIGHTS", {
 # Si el balance crece, se permite escalar conservadoramente.
 
 ADAPTIVE_RISK_ENABLED   = bool(dyn.get("ADAPTIVE_RISK_ENABLED", True))
-ADAPTIVE_RISK_FLOOR     = float(dyn.get("ADAPTIVE_RISK_FLOOR", 0.005))   # 0.5% mínimo
-ADAPTIVE_RISK_CEIL      = float(dyn.get("ADAPTIVE_RISK_CEIL", 0.03))     # 3% máximo
-ADAPTIVE_DRAWDOWN_FLOOR = float(dyn.get("ADAPTIVE_DRAWDOWN_FLOOR", 0.85))# reducir si balance < 85% inicial
+ADAPTIVE_RISK_FLOOR     = validate_percentage("ADAPTIVE_RISK_FLOOR", normalize_percentage(float(dyn.get("ADAPTIVE_RISK_FLOOR", 0.005)), "ADAPTIVE_RISK_FLOOR"))
+ADAPTIVE_RISK_CEIL      = validate_percentage("ADAPTIVE_RISK_CEIL", normalize_percentage(float(dyn.get("ADAPTIVE_RISK_CEIL", 0.03)), "ADAPTIVE_RISK_CEIL"))
+ADAPTIVE_DRAWDOWN_FLOOR = validate_percentage("ADAPTIVE_DRAWDOWN_FLOOR", normalize_percentage(float(dyn.get("ADAPTIVE_DRAWDOWN_FLOOR", 0.85)), "ADAPTIVE_DRAWDOWN_FLOOR"))
 ADAPTIVE_GROWTH_CEIL    = float(dyn.get("ADAPTIVE_GROWTH_CEIL", 1.20))   # aumentar si balance > 120% inicial

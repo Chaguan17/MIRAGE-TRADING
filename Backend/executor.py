@@ -22,22 +22,43 @@ def is_paper_trading(client):
     return True
 
 
-def format_order_amount(symbol, amount):
+def format_order_amount(symbol, amount, client=None):
+    if client is not None and hasattr(client, 'client') and hasattr(client.client, 'amount_to_precision'):
+        try:
+            return float(client.client.amount_to_precision(symbol, amount))
+        except Exception:
+            pass
     sym = str(symbol or '').upper().replace('/', '').replace(':USDT', '')
     amt = float(amount or 0)
-    if sym in ['XRPUSDT', 'ADAUSDT', 'HBARUSDT', 'DOGEUSDT']:
+    if sym in ['XRPUSDT', 'ADAUSDT', 'HBARUSDT', 'DOGEUSDT', 'PEPEUSDT', 'SHIBUSDT', 'TRXUSDT']:
         return float(int(amt))
     elif sym in ['BTCUSDT', 'ETHUSDT']:
         return round(amt, 3)
-    elif sym in ['SOLUSDT', 'BNBUSDT', 'LINKUSDT']:
+    elif sym in ['SOLUSDT', 'BNBUSDT', 'LINKUSDT', 'AVAXUSDT', 'NEARUSDT', 'SUIUSDT']:
         return round(amt, 2)
     else:
         return round(amt, 2)
 
 
+def format_order_price(symbol, price, client=None):
+    if client is not None and hasattr(client, 'client') and hasattr(client.client, 'price_to_precision'):
+        try:
+            return float(client.client.price_to_precision(symbol, price))
+        except Exception:
+            pass
+    sym = str(symbol or '').upper().replace('/', '').replace(':USDT', '')
+    p = float(price or 0)
+    if sym in ['XRPUSDT', 'HBARUSDT', 'ADAUSDT', 'DOGEUSDT', 'SUIUSDT']:
+        return round(p, 4)
+    elif sym in ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']:
+        return round(p, 2)
+    else:
+        return round(p, 4 if p < 10.0 else 2)
+
+
 def _safe_create_order(client, symbol, order_type, side, amount, price=None, params=None, action='LONG'):
     """
-    Crea una orden en Binance. Ajusta la precisión del monto según el símbolo.
+    Crea una orden en Binance. Ajusta la precisión dinámica del monto y precio según el símbolo.
     Si Binance devuelve el error -4061 (Hedge Mode setting), reintenta automáticamente
     adjuntando el parámetro positionSide ('LONG' o 'SHORT') y removiendo 'reduceOnly' (error -1106).
     """
@@ -45,7 +66,8 @@ def _safe_create_order(client, symbol, order_type, side, amount, price=None, par
         params = {}
 
     pos_side = 'LONG' if action == 'LONG' else 'SHORT'
-    formatted_amount = format_order_amount(symbol, amount)
+    formatted_amount = format_order_amount(symbol, amount, client=client)
+    formatted_price = format_order_price(symbol, price, client=client) if price is not None else None
 
     try:
         return client.client.create_order(
@@ -53,7 +75,7 @@ def _safe_create_order(client, symbol, order_type, side, amount, price=None, par
             type=order_type,
             side=side.upper(),
             amount=formatted_amount,
-            price=price,
+            price=formatted_price,
             params=params
         )
     except Exception as e:
@@ -69,7 +91,7 @@ def _safe_create_order(client, symbol, order_type, side, amount, price=None, par
                 type=order_type,
                 side=side.upper(),
                 amount=formatted_amount,
-                price=price,
+                price=formatted_price,
                 params=hedge_params
             )
         raise e

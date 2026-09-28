@@ -1,0 +1,46 @@
+{
+  "ADAPTIVE_RISK_FLOOR": {
+    "label": "Riesgo adaptativo mínimo",
+    "description": "Límite inferior del riesgo por operación cuando el riesgo adaptativo está activo.",
+    "tab": "risk",
+    "type": "number",
+    "isPercentage": true,
+    "min": 0.001,
+    "max": 0.05,
+    "step": 0.001,
+    "unit": "%"
+  },
+  "ADAPTIVE_RISK_CEIL": {
+    "label": "Riesgo adaptativo máximo",
+    "description": "Límite superior del riesgo por operación cuando el riesgo adaptativo está activo.",
+    "tab": "risk",
+    "type": "number",
+    "isPercentage": true,
+    "min": 0.005,
+    "max": 0.15,
+    "step": 0.001,
+    "unit": "%"
+  },
+  "ADAPTIVE_DRAWDOWN_FLOOR": {
+    "label": "Umbral mínimo de drawdown adaptativo",
+    "description": "Fracción del máximo de balance a partir de la cual se reduce el riesgo; 85% significa 0.85.",
+    "tab": "risk",
+    "type": "number",
+    "isPercentage": true,
+    "min": 0.5,
+    "max": 0.99,
+    "step": 0.01,
+    "unit": "%"
+  },
+  "VETO_CRASH_PCT": {
+    "label": "Caída para veto de crash",
+    "description": "Caída porcentual que activa el veto de crash.",
+    "tab": "vetos",
+    "type": "number",
+    "isPercentage": true,
+    "min": 0.01,
+    "max": 0.3,
+    "step": 0.005,
+    "unit": "%"
+  }
+}

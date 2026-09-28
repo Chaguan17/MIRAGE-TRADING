@@ -284,8 +284,9 @@ class TestOptimizerIntegrity:
     def test_optimizer_sin_datos_sinteticos_np_random(self):
         """Falla inmediatamente si alguien reintroduce np.random para datos de features o targets."""
         import os
-        optimizer_path = os.path.join("brain", "optimizer.py")
-        assert os.path.exists(optimizer_path), "No se encontró optimizer.py"
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        optimizer_path = os.path.join(backend_dir, "brain", "optimizer.py")
+        assert os.path.exists(optimizer_path), f"No se encontró optimizer.py en {optimizer_path}"
 
         with open(optimizer_path, "r", encoding="utf-8") as f:
             content = f.read()

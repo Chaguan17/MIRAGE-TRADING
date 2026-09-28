@@ -1,9 +1,47 @@
 import logging
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
 
 logger = logging.getLogger(__name__)
+
+
+def _calc_ema(series: pd.Series, length: int) -> pd.Series:
+    return series.ewm(span=length, adjust=False).mean()
+
+
+def _calc_rsi(series: pd.Series, length: int = 14) -> pd.Series:
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0).ewm(alpha=1.0 / length, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1.0 / length, adjust=False).mean()
+    rs = gain / (loss + 1e-9)
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def _calc_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    macd_sig = macd_line.ewm(span=signal, adjust=False).mean()
+    macd_hist = macd_line - macd_sig
+    return macd_line, macd_sig, macd_hist
+
+
+def _calc_atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs()
+    ], axis=1).max(axis=1)
+    return tr.ewm(alpha=1.0 / length, adjust=False).mean()
+
+
+def _calc_bbands(close: pd.Series, length: int = 20, std: float = 2.0):
+    sma = close.rolling(length, min_periods=1).mean()
+    rstd = close.rolling(length, min_periods=1).std().fillna(0.0)
+    bbu = sma + (std * rstd)
+    bbl = sma - (std * rstd)
+    return bbu, bbl
 
 
 class DataEngine:
@@ -43,7 +81,7 @@ class DataEngine:
             df_sorted = df.sort_values('timestamp')
             
             if df_1h is not None and not df_1h.empty and 'timestamp' in df_1h.columns:
-                ema50_1h = ta.ema(df_1h['close'], length=50)
+                ema50_1h = _calc_ema(df_1h['close'], length=50)
                 if ema50_1h is not None:
                     df_1h_temp = pd.DataFrame({'EMA50_1h': ema50_1h})
                     df_1h_temp['timestamp'] = df_1h['timestamp']
@@ -54,7 +92,7 @@ class DataEngine:
                         df_sorted = df_sorted.drop(columns=['EMA50_1h'])
 
             if df_4h is not None and not df_4h.empty and 'timestamp' in df_4h.columns:
-                ema50_4h = ta.ema(df_4h['close'], length=50)
+                ema50_4h = _calc_ema(df_4h['close'], length=50)
                 if ema50_4h is not None:
                     df_4h_temp = pd.DataFrame({'EMA50_4h': ema50_4h})
                     df_4h_temp['timestamp'] = df_4h['timestamp']
@@ -67,29 +105,20 @@ class DataEngine:
             df = df_sorted.sort_index()
 
         # ── 1. TENDENCIA ────────────────────────────────────────────────────
-        ema20 = ta.ema(df['close'], length=20)
-        df['EMA_20'] = ema20 if ema20 is not None else pd.Series(np.nan, index=df.index)
-        
-        ema50 = ta.ema(df['close'], length=50)
-        df['EMA_50'] = ema50 if ema50 is not None else pd.Series(np.nan, index=df.index)
-        
-        ema200 = ta.ema(df['close'], length=200)
-        df['EMA_200'] = ema200 if ema200 is not None else pd.Series(np.nan, index=df.index)
+        df['EMA_20'] = _calc_ema(df['close'], length=20)
+        df['EMA_50'] = _calc_ema(df['close'], length=50)
+        df['EMA_200'] = _calc_ema(df['close'], length=200)
         
         df['EMA_diff']      = df['EMA_20'] - df['EMA_50']
         df['EMA_diff_norm'] = df['EMA_diff'] / (df['close'] * 0.001 + 1e-9)
 
         # ── 2. MOMENTUM ─────────────────────────────────────────────────────
-        rsi = ta.rsi(df['close'], length=14)
-        df['RSI'] = rsi if rsi is not None else pd.Series(np.nan, index=df.index)
+        df['RSI'] = _calc_rsi(df['close'], length=14)
         
-        macd_df    = ta.macd(df['close'], fast=12, slow=26, signal=9)
-        if macd_df is not None and not macd_df.empty:
-            df['MACD']        = macd_df.iloc[:, 0]
-            df['MACD_signal'] = macd_df.iloc[:, 1]
-            df['MACD_hist']   = macd_df.iloc[:, 2]
-        else:
-            df['MACD'] = df['MACD_signal'] = df['MACD_hist'] = 0
+        macd_line, macd_sig, macd_hist = _calc_macd(df['close'], fast=12, slow=26, signal=9)
+        df['MACD']        = macd_line
+        df['MACD_signal'] = macd_sig
+        df['MACD_hist']   = macd_hist
 
         # ── 7. ALTERNATIVE DATA (Institucional) ─────────────────────────────
         if 'funding_rate' not in df.columns:
@@ -98,38 +127,17 @@ class DataEngine:
         df['fear_and_greed'] = self._get_fear_and_greed()
 
         # ── 3. VOLATILIDAD ──────────────────────────────────────────────────
-        atr = ta.atr(df['high'], df['low'], df['close'], length=14)
-        df['ATR'] = atr if atr is not None else pd.Series(np.nan, index=df.index)
+        df['ATR'] = _calc_atr(df['high'], df['low'], df['close'], length=14)
         df['ATR_pct'] = df['ATR'] / df['close'] * 100
 
-        bbands = ta.bbands(df['close'], length=20, std=2.0)
-        if bbands is not None:
-            df = pd.concat([df, bbands], axis=1)
-
-        if self._bb_upper_col is None:
-            for u, l in [
-                ('BBU_20_2.0', 'BBL_20_2.0'),
-                ('BBU_20_2',   'BBL_20_2'),
-                ('BBU_20',     'BBL_20'),
-            ]:
-                if u in df.columns and l in df.columns:
-                    self._bb_upper_col, self._bb_lower_col = u, l
-                    break
-
-        if self._bb_upper_col and self._bb_upper_col in df.columns:
-            df['BB_upper']    = df[self._bb_upper_col]
-            df['BB_lower']    = df[self._bb_lower_col]
-            df['BB_width']    = (df['BB_upper'] - df['BB_lower']) / df['close'] * 100
-            df['BB_position'] = (df['close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'] + 1e-9)
-        else:
-            df['BB_upper'] = df['close']
-            df['BB_lower'] = df['close']
-            df['BB_width'] = 0.0
-            df['BB_position'] = 0.5
+        bbu, bbl = _calc_bbands(df['close'], length=20, std=2.0)
+        df['BB_upper']    = bbu
+        df['BB_lower']    = bbl
+        df['BB_width']    = (df['BB_upper'] - df['BB_lower']) / df['close'] * 100
+        df['BB_position'] = (df['close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'] + 1e-9)
 
         # ── 4. VOLUMEN ──────────────────────────────────────────────────────
-        volume_ma = ta.ema(df['volume'], length=20)
-        df['volume_ma'] = volume_ma if volume_ma is not None else pd.Series(np.nan, index=df.index)
+        df['volume_ma'] = _calc_ema(df['volume'], length=20)
         df['volume_ratio'] = df['volume'] / (df['volume_ma'] + 1e-9)
 
         # ── 5. SEÑALES BINARIAS ──────────────────────────────────────────────
